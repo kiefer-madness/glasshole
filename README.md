@@ -1,2 +1,4 @@
 # glasshole
-stained glass pattern maker
+stained glass pattern-making helper
+
+made using Claude (obviously)
