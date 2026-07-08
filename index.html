@@ -2291,11 +2291,11 @@ function exportPNG() {
 
   const dataURL = out.toDataURL("image/png");
   showModal("Export PNG",
-    `<p>This preview blocks direct downloads, so here's your image in-page:
-      <b>right-click (or long-press) it and choose \u201cSave image as\u2026\u201d</b>.</p>
+    `<p>Here's your image. <b>Right-click (or long-press) it and choose
+      \u201cSave image as\u2026\u201d</b>, or use the download button below.</p>
      <img src="${dataURL}" alt="Exported stained glass pattern">`,
     [
-      { label: "Try download anyway",
+      { label: "Download PNG",
         fn: () => tryDownloadDataURL(dataURL, "stained-glass.png") },
       { label: "Close", primary: true, fn: closeModal },
     ]);
@@ -2329,25 +2329,21 @@ function projectJSON() {
 function saveProject() {
   const json = projectJSON();
 
-  if (!EMBEDDED) {
-    downloadBlob(new Blob([json], { type: "application/json" }),
-                 "stained-glass-pattern.json");
-    statusEl.textContent = "Project saved as stained-glass-pattern.json";
-    return;
-  }
-
   showModal("Save project",
-    `<p>This preview blocks downloads, so copy the project text below and keep
-      it somewhere safe (e.g. paste into a file named <b>pattern.json</b>).
-      Restore it any time with \u201cLoad project\u201d.</p>
+    `<p>Copy the project text below, or download it as a <b>.json</b> file —
+      either can be restored later with \u201cLoad project\u201d.${EMBEDDED
+        ? " (If the download is blocked, copying always works.)" : ""}</p>
      <textarea id="save-text" readonly spellcheck="false"></textarea>`,
     [
       { label: "Copy to clipboard", primary: true,
         fn: () => copyToClipboard(json, document.getElementById("save-text")) },
-      { label: "Try download anyway",
-        fn: () => tryDownloadDataURL(
-          "data:application/json;charset=utf-8," + encodeURIComponent(json),
-          "stained-glass-pattern.json") },
+      { label: "Download .json",
+        fn: () => {
+          tryDownloadDataURL(
+            "data:application/json;charset=utf-8," + encodeURIComponent(json),
+            "stained-glass-pattern.json");
+          statusEl.textContent = "Download started (if your environment allows it)";
+        } },
       { label: "Close", fn: closeModal },
     ]);
   // set via property to avoid HTML-escaping a large JSON string
@@ -2450,10 +2446,6 @@ function loadProject(file) {
 }
 
 function openLoadDialog(fileInput) {
-  if (!EMBEDDED) {
-    fileInput.click();
-    return;
-  }
   showModal("Load project",
     `<p>Pick your saved <b>.json</b> file, or paste the project text you copied
       when saving.</p>
