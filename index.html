@@ -84,6 +84,14 @@
     color: #f4d8ad;
   }
   .tool svg { flex: 0 0 26px; }
+  .tool .chev {
+    flex: 0 0 26px;
+    text-align: center;
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+  #shapes-group { padding-left: 10px; }
+  #shapes-group .tool { width: calc(100% - 0px); }
 
   .rule {
     border: none;
@@ -661,22 +669,18 @@ const IC = {
                   <circle cx="19" cy="19" r="2.7" fill="none" stroke="${LEAD}" stroke-width="1.8"/>`),
 };
 
-const TOOLS = [
-  ["select",   "Select"],
-  null,
+const SHAPE_TOOL_LIST = [
   ["ellipse",  "Ellipse"],
   ["triangle", "Triangle"],
   ["rect",     "Rectangle"],
   ["pentagon", "Pentagon"],
   ["hexagon",  "Hexagon"],
-  null,
+];
+const LINE_TOOL_LIST = [
   ["line",     "Line"],
   ["guide",    "Guideline"],
   ["curve",    "Curve"],
   ["gcurve",   "Guide curve"],
-  null,
-  ["bucket",   "Paint fill"],
-  ["slice",    "Slice"],
 ];
 
 const HINTS = {
@@ -733,25 +737,49 @@ function buildToolbar() {
 
   bar.insertAdjacentHTML("beforeend", `<div class="panel-label">Tools</div>`);
 
-  for (const entry of TOOLS) {
-    if (entry === null) {
-      bar.insertAdjacentHTML("beforeend", `<hr class="rule">`);
-      continue;
-    }
-    const [key, label] = entry;
+  const toolButton = (key, label, parent = bar) => {
     const btn = document.createElement("button");
     btn.className = "tool";
     btn.dataset.tool = key;
     btn.innerHTML = `${IC[key]}<span>${label}</span>`;
     btn.addEventListener("click", () => setTool(key));
-    bar.appendChild(btn);
-  }
+    parent.appendChild(btn);
+    return btn;
+  };
+
+  toolButton("select", "Select");
+  bar.insertAdjacentHTML("beforeend", `<hr class="rule">`);
+
+  // collapsible shapes section (collapsed by default)
+  const shapesToggle = document.createElement("button");
+  shapesToggle.className = "tool";
+  shapesToggle.id = "shapes-toggle";
+  shapesToggle.title = "Show or hide the shape tools";
+  shapesToggle.innerHTML =
+    `<span class="chev" id="shapes-chev">\u25b8</span><span>Shapes</span>`;
+  bar.appendChild(shapesToggle);
+  const shapesGroup = document.createElement("div");
+  shapesGroup.id = "shapes-group";
+  shapesGroup.style.display = "none";
+  bar.appendChild(shapesGroup);
+  shapesToggle.addEventListener("click", () => {
+    const open = shapesGroup.style.display !== "none";
+    shapesGroup.style.display = open ? "none" : "block";
+    document.getElementById("shapes-chev").textContent =
+      open ? "\u25b8" : "\u25be";
+  });
+  for (const [key, label] of SHAPE_TOOL_LIST) toolButton(key, label, shapesGroup);
+
+  bar.insertAdjacentHTML("beforeend", `<hr class="rule">`);
+  for (const [key, label] of LINE_TOOL_LIST) toolButton(key, label);
+  bar.insertAdjacentHTML("beforeend", `<hr class="rule">`);
+  toolButton("slice", "Slice");
 
   bar.insertAdjacentHTML("beforeend", `
     <hr class="rule">
     <div class="panel-label">Lead line thickness</div>
     <div class="slider-wrap">
-      <input type="range" id="thickness" min="1" max="14" value="${thickness}">
+      <input type="range" id="thickness" min="1" max="40" value="${thickness}">
       <output id="thickness-out">${thickness}px</output>
     </div>
     <div class="panel-label">Grid size</div>
@@ -771,8 +799,17 @@ function buildToolbar() {
       <span>\u00d7</span>
       <input type="number" id="canvas-h" min="200" max="4000" step="10" value="${canvasH}">
     </div>
+    <div class="btnrow">
+      <button class="tool" id="btn-paper-portrait" title="Paper, portrait: 1700 \u00d7 2200">
+        ${icon(`<rect x="8" y="4" width="10" height="18" rx="1" fill="none" stroke="${LEAD}" stroke-width="1.8"/>`)}
+      </button>
+      <button class="tool" id="btn-paper-landscape" title="Paper, landscape: 2200 \u00d7 1700">
+        ${icon(`<rect x="4" y="8" width="18" height="10" rx="1" fill="none" stroke="${LEAD}" stroke-width="1.8"/>`)}
+      </button>
+    </div>
     <hr class="rule">
     <div class="panel-label">Paint</div>
+    <div id="bucket-slot"></div>
     <div id="paint-row">
       <input type="color" id="paint-color" value="${paintColor}" title="Fill color (white erases)">
     </div>
@@ -844,6 +881,9 @@ function buildToolbar() {
       : "Snapping OFF — free movement";
   });
 
+  // the paint bucket lives in the Paint panel, right above the color picker
+  toolButton("bucket", "Paint fill", document.getElementById("bucket-slot"));
+
   const wIn = document.getElementById("canvas-w");
   const hIn = document.getElementById("canvas-h");
   const onCanvasSize = () => {
@@ -855,6 +895,19 @@ function buildToolbar() {
   };
   wIn.addEventListener("change", onCanvasSize);
   hIn.addEventListener("change", onCanvasSize);
+
+  const setCanvasPreset = (w, h, label) => {
+    canvasW = w;
+    canvasH = h;
+    wIn.value = w;
+    hIn.value = h;
+    applyCanvasSize();
+    statusEl.textContent = `Canvas set to paper ${label} (${w}\u00d7${h})`;
+  };
+  document.getElementById("btn-paper-portrait").addEventListener("click",
+    () => setCanvasPreset(1700, 2200, "portrait"));
+  document.getElementById("btn-paper-landscape").addEventListener("click",
+    () => setCanvasPreset(2200, 1700, "landscape"));
 
   document.getElementById("paint-color").addEventListener("input", e => {
     paintColor = e.target.value;
@@ -2586,18 +2639,22 @@ window.addEventListener("keydown", evt => {
 buildToolbar();
 setTool("select");
 
-// start the canvas at the size of the visible pane (rounded to the grid)
-{
-  const wrap = document.getElementById("stage-wrap");
-  const w = (wrap.clientWidth || canvasW + 28) - 28;   // minus padding
-  const h = (wrap.clientHeight || canvasH + 28) - 28;
-  canvasW = Math.max(200, Math.round(w / 10) * 10);
-  canvasH = Math.max(200, Math.round(h / 10) * 10);
-  document.getElementById("canvas-w").value = canvasW;
-  document.getElementById("canvas-h").value = canvasH;
-}
+// default the canvas to paper portrait (1700 x 2200), zoomed to fit the pane
+canvasW = 1700;
+canvasH = 2200;
+document.getElementById("canvas-w").value = canvasW;
+document.getElementById("canvas-h").value = canvasH;
 applyCanvasSize();
 applyGrid();
+{
+  const wrap = document.getElementById("stage-wrap");
+  const availW = (wrap.clientWidth || 0) - 2 * WRAP_PAD;
+  const availH = (wrap.clientHeight || 0) - 2 * WRAP_PAD;
+  if (availW > 50 && availH > 50) {
+    zoom = Math.min(1, availW / canvasW, availH / canvasH);
+    applyZoom();
+  }
+}
 renderLayers();
 render();
 commit("New sheet");
