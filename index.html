@@ -1,0 +1,2614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stained Glass Pattern Designer</title>
+<style>
+  :root {
+    --ink: #26221c;          /* lead lines */
+    --paper: #f6f1e6;        /* pattern cartoon paper */
+    --paper-line: #e7dfcd;
+    --bench: #2e2a25;        /* workbench chrome */
+    --bench-hi: #3a352e;
+    --bench-edge: #4a443b;
+    --text: #e8e2d6;
+    --text-dim: #a89f8e;
+    --amber: #c9781f;        /* selection / active */
+    --amber-soft: rgba(201,120,31,.18);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: "Avenir Next", "Segoe UI", system-ui, sans-serif;
+    background: var(--bench);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  header {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    padding: 12px 18px 10px;
+    border-bottom: 1px solid var(--bench-edge);
+  }
+  header h1 {
+    font-family: Georgia, "Times New Roman", serif;
+    font-weight: 600;
+    font-size: 19px;
+    letter-spacing: .06em;
+    color: var(--text);
+  }
+  header h1 .amp { color: var(--amber); }
+  header .hint {
+    font-size: 12.5px;
+    color: var(--text-dim);
+    letter-spacing: .02em;
+  }
+
+  main { display: flex; flex: 1; min-height: 0; }
+
+  /* ---------- toolbar ---------- */
+  #toolbar {
+    width: 172px;
+    padding: 12px 10px;
+    background: var(--bench);
+    border-right: 1px solid var(--bench-edge);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    overflow-y: auto;
+  }
+  .tool {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 9px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: none;
+    color: var(--text);
+    font: inherit;
+    font-size: 13.5px;
+    cursor: pointer;
+    text-align: left;
+  }
+  .tool:hover { background: var(--bench-hi); }
+  .tool.active {
+    background: var(--amber-soft);
+    border-color: var(--amber);
+    color: #f4d8ad;
+  }
+  .tool svg { flex: 0 0 26px; }
+
+  .rule {
+    border: none;
+    border-top: 1px solid var(--bench-edge);
+    margin: 6px 2px;
+  }
+  .panel-label {
+    font-size: 11px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    padding: 4px 4px 2px;
+  }
+  .slider-wrap { padding: 2px 6px 6px; }
+  .slider-wrap output {
+    font-size: 12px; color: var(--text-dim); margin-left: 6px;
+  }
+  input[type="range"] {
+    width: 100%;
+    accent-color: var(--amber);
+  }
+  .tool.danger:hover { background: rgba(170,60,45,.22); }
+
+  /* ---------- canvas ---------- */
+  #stage-outer {
+    position: relative;          /* pins the badges over the scroll area */
+    flex: 1;
+    min-width: 0;
+    display: flex;
+  }
+  #stage-wrap { flex: 1; padding: 14px; min-width: 0; overflow: auto; }
+  #zoom-sizer {
+    position: relative;          /* reserves the scaled footprint */
+  }
+  #board {
+    position: absolute;
+    top: 0;
+    left: 0;
+    transform-origin: 0 0;       /* scaled by the zoom transform */
+    background:
+      linear-gradient(var(--paper-line) 1px, transparent 1px) 0 0 / 100% 28px,
+      linear-gradient(90deg, var(--paper-line) 1px, transparent 1px) 0 0 / 28px 100%,
+      var(--paper);
+    border-radius: 4px;
+    box-shadow: inset 0 0 0 1px #cfc5ad, 0 3px 14px rgba(0,0,0,.45);
+  }
+  #paint {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;       /* clicks fall through to the SVG on top */
+    mix-blend-mode: multiply;   /* paint tints the paper like glass */
+    border-radius: 4px;
+  }
+  #stage {
+    position: relative;         /* stacks above the paint layer */
+    touch-action: none;
+    display: block;
+  }
+  #coord {
+    position: absolute;
+    top: 22px;
+    right: 22px;
+    padding: 3px 8px;
+    background: rgba(38, 34, 28, .82);
+    color: #e8e2d6;
+    font: 600 11.5px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+    border-radius: 4px;
+    pointer-events: none;
+    display: none;
+    z-index: 5;
+  }
+  #zoom-badge {
+    position: absolute;
+    bottom: 22px;
+    right: 22px;
+    padding: 3px 8px;
+    background: rgba(38, 34, 28, .82);
+    color: #e8e2d6;
+    font: 600 11.5px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+    border-radius: 4px;
+    border: none;
+    cursor: pointer;
+    z-index: 5;
+  }
+  #zoom-badge:hover { color: #f4d8ad; }
+  #stage .piece { cursor: grab; }
+  #stage .piece:active { cursor: grabbing; }
+  #stage .hitline { stroke: transparent; fill: none; cursor: grab; }
+  .handle { cursor: move; }
+
+  footer {
+    padding: 7px 18px;
+    font-size: 12.5px;
+    color: var(--text-dim);
+    border-top: 1px solid var(--bench-edge);
+    min-height: 30px;
+  }
+
+  /* ---------- modal (export / save / load fallbacks) ---------- */
+  #modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 50;
+  }
+  #modal[hidden] { display: none; }
+  #modal-box {
+    background: var(--bench);
+    border: 1px solid var(--bench-edge);
+    border-radius: 8px;
+    padding: 16px;
+    width: min(560px, 92vw);
+    max-height: 86vh;
+    overflow: auto;
+    box-shadow: 0 10px 40px rgba(0,0,0,.5);
+  }
+  #modal-body p {
+    font-size: 13px;
+    color: var(--text-dim);
+    margin: 6px 0;
+    line-height: 1.45;
+  }
+  #modal-body img {
+    max-width: 100%;
+    border-radius: 4px;
+    display: block;
+    margin: 8px 0;
+    background: var(--paper);
+  }
+  #modal-body textarea {
+    width: 100%;
+    height: 160px;
+    background: var(--bench-hi);
+    color: var(--text);
+    border: 1px solid var(--bench-edge);
+    border-radius: 4px;
+    font: 12px/1.4 ui-monospace, monospace;
+    padding: 8px;
+    resize: vertical;
+  }
+  #modal-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+  #modal-actions button {
+    background: var(--bench-hi);
+    border: 1px solid var(--bench-edge);
+    border-radius: 5px;
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    padding: 6px 12px;
+    cursor: pointer;
+  }
+  #modal-actions button:hover { border-color: var(--amber); }
+  #modal-actions button.primary {
+    background: var(--amber-soft);
+    border-color: var(--amber);
+    color: #f4d8ad;
+  }
+
+  /* ---------- right-click menu ---------- */
+  #ctx {
+    position: fixed;
+    z-index: 100;
+    background: var(--bench);
+    border: 1px solid var(--bench-edge);
+    border-radius: 6px;
+    padding: 4px;
+    box-shadow: 0 6px 24px rgba(0,0,0,.5);
+    display: none;
+    min-width: 200px;
+  }
+  #ctx button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    padding: 7px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  #ctx button:hover:not(:disabled) {
+    background: var(--amber-soft);
+    color: #f4d8ad;
+  }
+  #ctx button:disabled { opacity: .45; cursor: default; }
+
+  /* ---------- toolbar button rows (undo/redo, copy/paste) ---------- */
+  .btnrow {
+    display: flex;
+    gap: 6px;
+    padding-bottom: 2px;
+  }
+  .btnrow .tool {
+    flex: 1;
+    justify-content: center;
+    gap: 6px;
+    border: 1px solid var(--bench-edge);
+  }
+  .btnrow .tool:disabled {
+    opacity: .35;
+    cursor: default;
+    background: none;
+  }
+
+  /* ---------- canvas size inputs ---------- */
+  #canvas-size {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 6px 6px;
+    font-size: 12.5px;
+    color: var(--text-dim);
+  }
+  #canvas-size input {
+    width: 56px;
+    padding: 4px 5px;
+    background: var(--bench-hi);
+    border: 1px solid var(--bench-edge);
+    border-radius: 4px;
+    color: var(--text);
+    font: inherit;
+    font-size: 12.5px;
+  }
+  #canvas-size input:focus {
+    outline: none;
+    border-color: var(--amber);
+  }
+
+  /* ---------- paint controls ---------- */
+  #paint-row { padding: 2px 6px 8px; }
+  #paint-color {
+    width: 100%;
+    height: 30px;
+    padding: 2px;
+    background: var(--bench-hi);
+    border: 1px solid var(--bench-edge);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+
+  /* ---------- history panel ---------- */
+  #history {
+    width: 176px;
+    border-left: 1px solid var(--bench-edge);
+    padding: 12px 10px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  #history-list {
+    list-style: none;
+    overflow-y: auto;
+    margin-top: 4px;
+    flex: 1;
+  }
+  #history-list li {
+    font-size: 12.5px;
+    padding: 5px 8px;
+    border-radius: 5px;
+    color: var(--text-dim);
+    cursor: pointer;
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #history-list li:hover { background: var(--bench-hi); }
+  #history-list li.current {
+    background: var(--amber-soft);
+    color: #f4d8ad;
+  }
+  #history-list li.future { opacity: .42; }
+  #history-list li .n {
+    font-size: 10.5px;
+    color: var(--text-dim);
+    min-width: 22px;
+    text-align: right;
+  }
+
+  /* ---------- layers panel ---------- */
+  .panel-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  #btn-add-layer {
+    background: var(--bench-hi);
+    border: 1px solid var(--bench-edge);
+    border-radius: 4px;
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1;
+    width: 22px;
+    height: 22px;
+    cursor: pointer;
+  }
+  #btn-add-layer:hover { border-color: var(--amber); }
+  #layers-list {
+    list-style: none;
+    max-height: 190px;
+    overflow-y: auto;
+    margin: 4px 0 6px;
+  }
+  #layers-list li {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 12.5px;
+    color: var(--text-dim);
+    padding: 4px 5px;
+    border-radius: 5px;
+    cursor: pointer;
+  }
+  #layers-list li:hover { background: var(--bench-hi); }
+  #layers-list li.current {
+    background: var(--amber-soft);
+    color: #f4d8ad;
+  }
+  #layers-list li button {
+    background: none;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    font-size: 12px;
+    padding: 1px 3px;
+    border-radius: 3px;
+  }
+  #layers-list li button:hover { background: rgba(255,255,255,.1); }
+  #layers-list .lname {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #btn-move-layer {
+    width: 100%;
+    justify-content: center;
+    font-size: 12.5px;
+    border: 1px solid var(--bench-edge);
+    margin-bottom: 4px;
+  }
+
+  /* ---------- transform handles ---------- */
+  .rot-handle { cursor: grab; }
+  .rot-handle:active { cursor: grabbing; }
+  .lock-btn {
+    cursor: pointer;
+    opacity: 0;                 /* revealed only while hovering the piece */
+    pointer-events: none;       /* invisible chips must not eat clicks */
+    transition: opacity .12s;
+  }
+  .lock-btn.show {
+    opacity: var(--lk, 1);
+    pointer-events: auto;
+  }
+  #stage .piece.locked { cursor: default; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>I got that kiefer madness, baby</h1>
+</header>
+
+<main>
+  <nav id="toolbar"></nav>
+  <div id="stage-outer">
+    <div id="stage-wrap">
+      <div id="zoom-sizer">
+        <div id="board">
+          <canvas id="paint"></canvas>
+          <svg id="stage" xmlns="http://www.w3.org/2000/svg"></svg>
+        </div>
+      </div>
+    </div>
+    <div id="coord"></div>
+    <button id="zoom-badge" title="Scroll to zoom · click to reset to 100%">100%</button>
+  </div>
+  <aside id="history">
+    <div class="panel-row">
+      <div class="panel-label">Layers</div>
+      <button id="btn-add-layer" title="Add a layer on top">+</button>
+    </div>
+    <ul id="layers-list"></ul>
+    <button class="tool" id="btn-move-layer"
+      title="Send the selected pieces to the highlighted layer">
+      <span>Send piece to layer</span>
+    </button>
+    <hr class="rule">
+    <div class="panel-label">History</div>
+    <ul id="history-list"></ul>
+  </aside>
+</main>
+
+<footer id="status"></footer>
+
+<div id="ctx"></div>
+
+<div id="modal" hidden>
+  <div id="modal-box">
+    <div class="panel-label" id="modal-title"></div>
+    <div id="modal-body"></div>
+    <div id="modal-actions"></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+/* ============================== constants ============================== */
+
+const LEAD = "#26221c";
+const AMBER = "#c9781f";
+const GUIDE = "rgba(70, 120, 210, .65)";   // guideline blue, translucent
+const GUIDE_WIDTH = 1.5;
+const GUIDE_DASH = "6 5";
+const HANDLE_R = 5.5;
+const HIT_DIST = 8;        // how close a click must be to a line to count
+const DEFAULT_RADIUS = 70;
+const GLASS = [
+  "rgba(126,180,220,.55)", "rgba(228,178,96,.55)", "rgba(148,190,120,.55)",
+  "rgba(190,140,185,.55)", "rgba(220,130,115,.55)", "rgba(230,205,110,.55)",
+  "rgba(140,150,205,.55)", "rgba(120,195,170,.55)",
+];
+
+/* ============================== state ================================== */
+
+let pieces = [];          // { id, kind, points:[[x,y]..], fill }
+let nextId = 1;
+let selection = [];        // multi-selection: array of piece objects
+function soleSelected() { return selection.length === 1 ? selection[0] : null; }
+function isSelected(p) { return selection.includes(p); }
+function unlockedSelection() { return selection.filter(p => !p.locked); }
+let tool = "select";
+let thickness = 4;
+let paletteIdx = 0;
+
+// drag: null | {mode:'body', startPointer, members, moved}
+//            | {mode:'vertex', index, moved} | {mode:'new', piece}
+//            | {mode:'scale', anchor, start, members, moved}
+//            | {mode:'rotate', center, startAngle, members, moved}
+//            | {mode:'marquee', start, cur, additive}
+// members: [{p, pts}] — the unlocked selection with pre-drag point copies
+let drag = null;
+
+// undo/redo: snapshots of the whole document, capped at 100 actions
+const HISTORY_MAX = 101;           // initial "New sheet" entry + 100 actions
+let history = [];                  // [{ label, state }]
+let historyIndex = -1;
+
+// clipboard for copy/paste (deep copies, offset a little on each paste)
+let clipboard = null;
+let pasteCount = 0;
+
+// view + document settings
+let gridSize = 28;                 // background grid pitch, px (view-only)
+let snapOn = false;                // snap moves/transforms to the grid
+let canvasW = 1200;                // canvas size
+let canvasH = 800;
+const lockedIds = new Set();       // which pieces are locked (not in history)
+
+// layers: ordered bottom -> top. Pieces carry a layer id.
+// Visibility is a view setting (like locks); structure/membership is history.
+let layers = [{ id: 1, name: "Base" }];
+let nextLayerId = 2;
+let activeLayerId = 1;             // new pieces land here
+const hiddenLayerIds = new Set();  // view-only
+
+// paint layer (raster, separate from the pattern — not in history)
+let paintColor = "#7eb4dc";
+let paintVisible = true;
+let fillsOn = true;                // show the automatic pastel shape tints
+
+function snap1(v) { return Math.round(v / gridSize) * gridSize; }
+function snapPt(x, y) { return snapOn ? [snap1(x), snap1(y)] : [x, y]; }
+
+function layerIndex(id) { return layers.findIndex(L => L.id === id); }
+function isGuidePiece(p) { return !!p.guide || p.kind === "guide"; }
+function layerVisible(p) { return !hiddenLayerIds.has(p.layer); }
+
+/* Pieces in stacking order: layer by layer (bottom first), preserving
+   insertion order within each layer. */
+function stackedPieces() {
+  const order = new Map(layers.map((L, i) => [L.id, i]));
+  return pieces
+    .map((p, i) => [p, i])
+    .sort((a, b) =>
+      ((order.get(a[0].layer) ?? 0) - (order.get(b[0].layer) ?? 0)) ||
+      (a[1] - b[1]))
+    .map(([p]) => p);
+}
+
+/* Flatten a translucent glass color against the paper so pieces on upper
+   layers are fully opaque and hide whatever sits beneath them. */
+const PAPER_RGB = [246, 241, 230];
+function opaqueFill(fill) {
+  const m = /rgba\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/.exec(fill || "");
+  if (!m) return fill;
+  const a = parseFloat(m[4]);
+  const mix = (c, p) => Math.round(c * a + p * (1 - a));
+  return `rgb(${mix(+m[1], PAPER_RGB[0])}, ${mix(+m[2], PAPER_RGB[1])}, ${mix(+m[3], PAPER_RGB[2])})`;
+}
+
+/* Fill color for a piece under the current display settings. Shared by the
+   on-screen renderer and the PNG exporter. */
+function pieceFill(p) {
+  if (p.kind !== "polygon" && p.kind !== "ellipse") return "none";
+  if (isGuidePiece(p)) return "transparent";   // guides: clickable, colorless
+  const upper = layerIndex(p.layer) > 0;
+  if (upper) {
+    // upper layers are always opaque — blank "paper" glass when tints are off
+    return fillsOn ? opaqueFill(p.fill)
+                   : `rgb(${PAPER_RGB[0]}, ${PAPER_RGB[1]}, ${PAPER_RGB[2]})`;
+  }
+  return fillsOn ? p.fill : "transparent";
+}
+
+const stage = document.getElementById("stage");
+const board = document.getElementById("board");
+const paintCanvas = document.getElementById("paint");
+const pctx = paintCanvas.getContext ? paintCanvas.getContext("2d") : null;
+const statusEl = document.getElementById("status");
+const historyList = document.getElementById("history-list");
+const layersList = document.getElementById("layers-list");
+
+/* ============================ tool icons =============================== */
+/* Tiny stained-glass swatches: each icon is a miniature of what the tool
+   makes, drawn with the same lead-line + glass-fill treatment as the app. */
+
+function icon(inner) {
+  return `<svg width="26" height="26" viewBox="0 0 26 26">${inner}</svg>`;
+}
+const IC = {
+  select:   icon(`<path d="M8 4 L8 19 L12 15.4 L14.6 21 L17 19.9 L14.4 14.4 L19.4 14 Z"
+                   fill="rgba(230,205,110,.55)" stroke="${LEAD}" stroke-width="1.6" stroke-linejoin="round"/>`),
+  ellipse:  icon(`<ellipse cx="13" cy="13" rx="9.5" ry="7" fill="rgba(126,180,220,.55)"
+                   stroke="${LEAD}" stroke-width="1.8"/>`),
+  triangle: icon(`<path d="M13 4.5 L22 21 L4 21 Z" fill="rgba(228,178,96,.55)"
+                   stroke="${LEAD}" stroke-width="1.8" stroke-linejoin="round"/>`),
+  rect:     icon(`<rect x="4" y="7" width="18" height="12" fill="rgba(148,190,120,.55)"
+                   stroke="${LEAD}" stroke-width="1.8"/>`),
+  pentagon: icon(`<path d="M13 3.5 L22.2 10.4 L18.7 21.4 L7.3 21.4 L3.8 10.4 Z"
+                   fill="rgba(190,140,185,.55)" stroke="${LEAD}" stroke-width="1.8" stroke-linejoin="round"/>`),
+  hexagon:  icon(`<path d="M13 3.2 L21.6 8.1 L21.6 17.9 L13 22.8 L4.4 17.9 L4.4 8.1 Z"
+                   fill="rgba(220,130,115,.55)" stroke="${LEAD}" stroke-width="1.8" stroke-linejoin="round"/>`),
+  line:     icon(`<line x1="5" y1="21" x2="21" y2="5" stroke="${LEAD}"
+                   stroke-width="2.4" stroke-linecap="round"/>`),
+  guide:    icon(`<line x1="5" y1="21" x2="21" y2="5" stroke="${GUIDE}"
+                   stroke-width="1.6" stroke-linecap="round" stroke-dasharray="4 3.5"/>`),
+  gcurve:   icon(`<path d="M4 20 Q13 2 22 20" fill="none" stroke="${GUIDE}"
+                   stroke-width="1.6" stroke-linecap="round" stroke-dasharray="4 3.5"/>`),
+  curve:    icon(`<path d="M4 20 Q13 2 22 20" fill="none" stroke="${LEAD}"
+                   stroke-width="2.4" stroke-linecap="round"/>`),
+  bucket:   icon(`<path d="M12.5 4.5 L20 12 L12 20 L4.5 12.5 Z" fill="rgba(126,180,220,.55)"
+                   stroke="${LEAD}" stroke-width="1.8" stroke-linejoin="round"/>
+                  <path d="M20.5 15.5 q2.3 3.2 0 4.6 q-2.3 -1.4 0 -4.6" fill="rgba(126,180,220,.8)"
+                   stroke="${LEAD}" stroke-width="1.3"/>`),
+  slice:    icon(`<path d="M8.8 16.4 L20 4.5 M17.2 16.4 L6 4.5" stroke="${LEAD}"
+                   stroke-width="1.9" stroke-linecap="round"/>
+                  <circle cx="7" cy="19" r="2.7" fill="none" stroke="${LEAD}" stroke-width="1.8"/>
+                  <circle cx="19" cy="19" r="2.7" fill="none" stroke="${LEAD}" stroke-width="1.8"/>`),
+};
+
+const TOOLS = [
+  ["select",   "Select"],
+  null,
+  ["ellipse",  "Ellipse"],
+  ["triangle", "Triangle"],
+  ["rect",     "Rectangle"],
+  ["pentagon", "Pentagon"],
+  ["hexagon",  "Hexagon"],
+  null,
+  ["line",     "Line"],
+  ["guide",    "Guideline"],
+  ["curve",    "Curve"],
+  ["gcurve",   "Guide curve"],
+  null,
+  ["bucket",   "Paint fill"],
+  ["slice",    "Slice"],
+];
+
+const HINTS = {
+  select:   "Select (S) — drag on empty paper for marquee select · Shift-click adds to selection · drag body to move · square handles skew a vertex · corner dots resize (Shift = uniform) · top knob rotates (Shift = 15\u00b0 steps) · Delete removes",
+  bucket:   "Paint fill — click any segment to flood it up to the lead lines, even where several shapes bound it · white paint erases",
+  slice:    "Slice (X) — click a lead line to erase the span between its nearest crossings with other pieces",
+  ellipse:  "Ellipse — click on the paper to place one, then pull its 8 handles to reshape it",
+  triangle: "Triangle — click on the paper to place one",
+  rect:     "Rectangle — click on the paper to place one",
+  pentagon: "Pentagon — click on the paper to place one",
+  hexagon:  "Hexagon — click on the paper to place one",
+  line:     "Line (L) — press and drag on the paper to draw · length shows in grid squares",
+  guide:    "Guideline (G) — press and drag to draw a construction guide · not part of the artwork: excluded from exports and paint boundaries, but slicing does cut at guide crossings",
+  gcurve:   "Guide curve — a curved construction guide · bend it with the round middle handle · right-click any piece to convert it to or from a guideline",
+  curve:    "Curve (C) — press and drag to place it, then bend it with the round middle handle · length shows in grid squares",
+};
+
+/* ============================ toolbar UI =============================== */
+
+function buildToolbar() {
+  const bar = document.getElementById("toolbar");
+
+  bar.insertAdjacentHTML("beforeend", `
+    <div class="btnrow">
+      <button class="tool" id="btn-undo" title="Undo (Ctrl+Z)">
+        ${icon(`<path d="M10 6 L5 11 L10 16 M5 11 H16 a5 5 0 0 1 0 10 h-3"
+          fill="none" stroke="${LEAD}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>`)}
+      </button>
+      <button class="tool" id="btn-redo" title="Redo (Ctrl+Shift+Z / Ctrl+Y)">
+        ${icon(`<path d="M16 6 L21 11 L16 16 M21 11 H10 a5 5 0 0 0 0 10 h3"
+          fill="none" stroke="${LEAD}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>`)}
+      </button>
+    </div>
+    <div class="btnrow">
+      <button class="tool" id="btn-copy" title="Copy selection (Ctrl+C)">
+        ${icon(`<rect x="8.5" y="8.5" width="12" height="12" rx="1.5" fill="rgba(126,180,220,.55)"
+          stroke="${LEAD}" stroke-width="1.8"/>
+          <path d="M5.5 15.5 v-9 a1.5 1.5 0 0 1 1.5-1.5 h9" fill="none"
+          stroke="${LEAD}" stroke-width="1.8" stroke-linecap="round"/>`)}
+      </button>
+      <button class="tool" id="btn-paste" title="Paste (Ctrl+V)">
+        ${icon(`<rect x="6" y="5.5" width="14" height="16" rx="1.5" fill="rgba(228,178,96,.55)"
+          stroke="${LEAD}" stroke-width="1.8"/>
+          <rect x="10" y="3.5" width="6" height="4" rx="1" fill="#fff"
+          stroke="${LEAD}" stroke-width="1.6"/>`)}
+      </button>
+    </div>
+    <hr class="rule">
+  `);
+  document.getElementById("btn-undo").addEventListener("click", undo);
+  document.getElementById("btn-redo").addEventListener("click", redo);
+  document.getElementById("btn-copy").addEventListener("click", copySelected);
+  document.getElementById("btn-paste").addEventListener("click", pasteClipboard);
+
+  bar.insertAdjacentHTML("beforeend", `<div class="panel-label">Tools</div>`);
+
+  for (const entry of TOOLS) {
+    if (entry === null) {
+      bar.insertAdjacentHTML("beforeend", `<hr class="rule">`);
+      continue;
+    }
+    const [key, label] = entry;
+    const btn = document.createElement("button");
+    btn.className = "tool";
+    btn.dataset.tool = key;
+    btn.innerHTML = `${IC[key]}<span>${label}</span>`;
+    btn.addEventListener("click", () => setTool(key));
+    bar.appendChild(btn);
+  }
+
+  bar.insertAdjacentHTML("beforeend", `
+    <hr class="rule">
+    <div class="panel-label">Lead line thickness</div>
+    <div class="slider-wrap">
+      <input type="range" id="thickness" min="1" max="14" value="${thickness}">
+      <output id="thickness-out">${thickness}px</output>
+    </div>
+    <div class="panel-label">Grid size</div>
+    <div class="slider-wrap">
+      <input type="range" id="grid" min="8" max="96" value="${gridSize}">
+      <output id="grid-out">${gridSize}px</output>
+    </div>
+    <button class="tool" id="btn-snap" title="Snap moves, drawing, and transforms to the grid">
+      ${icon(`<path d="M4 9 H22 M4 17 H22 M9 4 V22 M17 4 V22" stroke="${LEAD}"
+        stroke-width="1.4" opacity=".55"/>
+        <circle cx="9" cy="9" r="3.2" fill="rgba(228,178,96,.75)" stroke="${LEAD}" stroke-width="1.6"/>`)}
+      <span>Snap to grid</span>
+    </button>
+    <div class="panel-label">Canvas size</div>
+    <div id="canvas-size">
+      <input type="number" id="canvas-w" min="200" max="4000" step="10" value="${canvasW}">
+      <span>\u00d7</span>
+      <input type="number" id="canvas-h" min="200" max="4000" step="10" value="${canvasH}">
+    </div>
+    <hr class="rule">
+    <div class="panel-label">Paint</div>
+    <div id="paint-row">
+      <input type="color" id="paint-color" value="${paintColor}" title="Fill color (white erases)">
+    </div>
+    <button class="tool active" id="btn-paint-vis" title="Show or hide the painting layer">
+      ${icon(`<path d="M3 13 q10 -11 20 0 q-10 11 -20 0 Z" fill="none" stroke="${LEAD}" stroke-width="1.8"/>
+        <circle cx="13" cy="13" r="3.4" fill="rgba(126,180,220,.75)" stroke="${LEAD}" stroke-width="1.6"/>`)}
+      <span>Paint layer</span>
+    </button>
+    <button class="tool active" id="btn-fills" title="Show or hide the automatic pastel shape tints">
+      ${icon(`<path d="M13 3.2 L21.6 8.1 L21.6 17.9 L13 22.8 L4.4 17.9 L4.4 8.1 Z"
+        fill="rgba(148,190,120,.55)" stroke="${LEAD}" stroke-width="1.6" stroke-linejoin="round"/>`)}
+      <span>Shape tints</span>
+    </button>
+    <button class="tool danger" id="btn-paint-clear" title="Erase all paint">
+      ${icon(`<path d="M12.5 4.5 L20 12 L12 20 L4.5 12.5 Z" fill="none"
+        stroke="${LEAD}" stroke-width="1.8" stroke-dasharray="3 3" stroke-linejoin="round"/>`)}
+      <span>Clear paint</span>
+    </button>
+    <hr class="rule">
+    <button class="tool danger" id="btn-delete">
+      ${icon(`<path d="M7 7 L19 19 M19 7 L7 19" stroke="${LEAD}" stroke-width="2.4" stroke-linecap="round"/>`)}
+      <span>Delete piece</span>
+    </button>
+    <button class="tool danger" id="btn-clear">
+      ${icon(`<rect x="5" y="5" width="16" height="16" rx="2" fill="none" stroke="${LEAD}" stroke-width="1.8" stroke-dasharray="3 3"/>`)}
+      <span>Clear all</span>
+    </button>
+    <hr class="rule">
+    <div class="panel-label">File</div>
+    <button class="tool" id="btn-export" title="Export the artwork as a PNG image">
+      ${icon(`<rect x="4" y="4" width="18" height="18" rx="2" fill="none" stroke="${LEAD}" stroke-width="1.8"/>
+        <circle cx="9.5" cy="9.5" r="2" fill="rgba(228,178,96,.7)" stroke="${LEAD}" stroke-width="1.2"/>
+        <path d="M5 19 L11 13 L15 17 L18 14 L21 17" fill="none" stroke="${LEAD}" stroke-width="1.6" stroke-linejoin="round"/>`)}
+      <span>Export PNG</span>
+    </button>
+    <button class="tool" id="btn-save" title="Save the whole project to a file you can load later">
+      ${icon(`<path d="M5 5 h13 l3 3 v13 h-16 Z" fill="none" stroke="${LEAD}" stroke-width="1.8" stroke-linejoin="round"/>
+        <rect x="9" y="5" width="8" height="5" fill="rgba(126,180,220,.55)" stroke="${LEAD}" stroke-width="1.4"/>
+        <rect x="8" y="14" width="10" height="7" fill="none" stroke="${LEAD}" stroke-width="1.4"/>`)}
+      <span>Save project</span>
+    </button>
+    <button class="tool" id="btn-open" title="Load a saved project file">
+      ${icon(`<path d="M4 8 h7 l2 2 h9 v10 h-18 Z" fill="rgba(228,178,96,.55)" stroke="${LEAD}" stroke-width="1.8" stroke-linejoin="round"/>`)}
+      <span>Load project</span>
+    </button>
+    <input type="file" id="file-open" accept=".json,application/json" hidden>
+  `);
+
+  const slider = document.getElementById("thickness");
+  slider.addEventListener("input", e => {
+    thickness = +e.target.value;
+    document.getElementById("thickness-out").textContent = thickness + "px";
+    render();
+  });
+
+  // grid pitch is a view preference: applied live, not recorded in history
+  document.getElementById("grid").addEventListener("input", e => {
+    gridSize = +e.target.value;
+    document.getElementById("grid-out").textContent = gridSize + "px";
+    applyGrid();
+    render();               // length labels are measured in grid squares
+  });
+
+  document.getElementById("btn-snap").addEventListener("click", () => {
+    snapOn = !snapOn;
+    document.getElementById("btn-snap").classList.toggle("active", snapOn);
+    statusEl.textContent = snapOn
+      ? `Snapping ON — placement, moves, vertices, resizes land on the ${gridSize}px grid; rotation in 15\u00b0 steps`
+      : "Snapping OFF — free movement";
+  });
+
+  const wIn = document.getElementById("canvas-w");
+  const hIn = document.getElementById("canvas-h");
+  const onCanvasSize = () => {
+    canvasW = Math.min(4000, Math.max(200, +wIn.value || canvasW));
+    canvasH = Math.min(4000, Math.max(200, +hIn.value || canvasH));
+    wIn.value = canvasW;
+    hIn.value = canvasH;
+    applyCanvasSize();
+  };
+  wIn.addEventListener("change", onCanvasSize);
+  hIn.addEventListener("change", onCanvasSize);
+
+  document.getElementById("paint-color").addEventListener("input", e => {
+    paintColor = e.target.value;
+  });
+  document.getElementById("btn-paint-vis").addEventListener("click", () => {
+    paintVisible = !paintVisible;
+    document.getElementById("btn-paint-vis").classList.toggle("active", paintVisible);
+    paintCanvas.style.display = paintVisible ? "block" : "none";
+    statusEl.textContent = paintVisible ? "Paint layer shown" : "Paint layer hidden";
+  });
+  document.getElementById("btn-fills").addEventListener("click", () => {
+    fillsOn = !fillsOn;
+    document.getElementById("btn-fills").classList.toggle("active", fillsOn);
+    render();
+    statusEl.textContent = fillsOn
+      ? "Shape tints shown"
+      : "Shape tints hidden — the paint layer shows through cleanly";
+  });
+  document.getElementById("btn-paint-clear").addEventListener("click", () => {
+    if (pctx) pctx.clearRect(0, 0, paintCanvas.width, paintCanvas.height);
+    statusEl.textContent = "Paint cleared";
+  });
+
+  document.getElementById("btn-export").addEventListener("click", exportPNG);
+  document.getElementById("btn-save").addEventListener("click", saveProject);
+  const fileInput = document.getElementById("file-open");
+  document.getElementById("btn-open").addEventListener("click",
+    () => openLoadDialog(fileInput));
+  fileInput.addEventListener("change", () => {
+    if (fileInput.files && fileInput.files[0]) loadProject(fileInput.files[0]);
+    fileInput.value = "";              // allow re-loading the same file
+  });
+
+  document.getElementById("btn-delete").addEventListener("click", deleteSelected);
+  document.getElementById("btn-clear").addEventListener("click", () => {
+    if (!pieces.length) return;
+    pieces = []; selection = []; render();
+    commit("Clear sheet");
+  });
+}
+
+function setTool(key) {
+  tool = key;
+  stage.style.cursor = key === "bucket" ? "crosshair" : "";
+  document.querySelectorAll(".tool[data-tool]").forEach(b =>
+    b.classList.toggle("active", b.dataset.tool === key));
+  statusEl.textContent = HINTS[key] || "";
+}
+
+/* ========================== undo / redo ================================ */
+
+function snapshot() {
+  return JSON.stringify({
+    // lock state is excluded — it's a setting, re-applied on restore
+    pieces: pieces.map(({ locked, ...rest }) => rest),
+    nextId,
+    layers,
+    nextLayerId,
+    selectedIds: selection.map(p => p.id),
+  });
+}
+
+function commit(label) {
+  history = history.slice(0, historyIndex + 1);  // drop any redo branch
+  history.push({ label, state: snapshot() });
+  if (history.length > HISTORY_MAX) history.shift();
+  historyIndex = history.length - 1;
+  renderHistory();
+}
+
+function restore(index) {
+  if (index < 0 || index >= history.length) return;
+  historyIndex = index;
+  const s = JSON.parse(history[index].state);
+  pieces = s.pieces;
+  pieces.forEach(p => { if (lockedIds.has(p.id)) p.locked = true; });
+  nextId = s.nextId;
+  layers = s.layers || layers;
+  nextLayerId = s.nextLayerId || nextLayerId;
+  pieces.forEach(p => { if (layerIndex(p.layer) === -1) p.layer = layers[0].id; });
+  if (layerIndex(activeLayerId) === -1) activeLayerId = layers[layers.length - 1].id;
+  const selIds = s.selectedIds || (s.selectedId != null ? [s.selectedId] : []);
+  selection = pieces.filter(p => selIds.includes(p.id));
+
+  render();
+  renderHistory();
+  renderLayers();
+}
+
+function undo() { restore(historyIndex - 1); }
+function redo() { restore(historyIndex + 1); }
+
+function renderHistory() {
+  historyList.innerHTML = history.map((h, i) => {
+    const cls = i === historyIndex ? "current" : i > historyIndex ? "future" : "";
+    return `<li class="${cls}" data-index="${i}" title="${h.label}">
+      <span class="n">${i === 0 ? "\u2013" : i}</span><span>${h.label}</span></li>`;
+  }).join("");
+  historyList.querySelector(".current")?.scrollIntoView({ block: "nearest" });
+
+  document.getElementById("btn-undo").disabled = historyIndex <= 0;
+  document.getElementById("btn-redo").disabled = historyIndex >= history.length - 1;
+}
+
+historyList.addEventListener("click", evt => {
+  const li = evt.target.closest("li[data-index]");
+  if (li) restore(+li.dataset.index);
+});
+
+/* ============================== layers ================================= */
+
+function renderLayers() {
+  // top layer first in the list, like every art tool
+  layersList.innerHTML = [...layers].reverse().map(L => {
+    const hidden = hiddenLayerIds.has(L.id);
+    const active = L.id === activeLayerId;
+    return `<li class="${active ? "current" : ""}" data-layer="${L.id}">
+      <button data-eye="${L.id}" title="${hidden ? "Show" : "Hide"} layer">
+        ${hidden ? "\u25cb" : "\u25c9"}</button>
+      <span class="lname">${L.name}</span>
+      <button data-select="${L.id}"
+        title="Select every piece on this layer (transform them as one)">\u2b1a</button>
+      <button data-up="${L.id}" title="Raise layer">\u25b4</button>
+      <button data-down="${L.id}" title="Lower layer">\u25be</button>
+      <button data-del="${L.id}" title="Delete layer and its pieces">\u00d7</button>
+    </li>`;
+  }).join("");
+}
+
+layersList.addEventListener("click", evt => {
+  const t = evt.target;
+
+  if (t.dataset.select) {                  // select the whole layer
+    const id = +t.dataset.select;
+    const L = layers[layerIndex(id)];
+    if (hiddenLayerIds.has(id)) {
+      statusEl.textContent = `"${L.name}" is hidden — show it to select its pieces`;
+      return;
+    }
+    selection = pieces.filter(p => p.layer === id);
+    activeLayerId = id;
+    render();
+    renderLayers();
+    statusEl.textContent = selection.length
+      ? `Selected all ${selection.length} piece${selection.length > 1 ? "s" : ""} on "${L.name}" — use the frame to move, resize, or rotate the layer as one`
+      : `"${L.name}" has no pieces yet`;
+    return;
+  }
+
+  if (t.dataset.eye) {                     // visibility: view-only, no history
+    const id = +t.dataset.eye;
+    hiddenLayerIds.has(id) ? hiddenLayerIds.delete(id) : hiddenLayerIds.add(id);
+    selection = selection.filter(p => !hiddenLayerIds.has(p.layer));
+    render();
+    renderLayers();
+    return;
+  }
+
+  if (t.dataset.up || t.dataset.down) {    // reorder: document edit
+    const id = +(t.dataset.up || t.dataset.down);
+    const i = layerIndex(id);
+    const j = t.dataset.up ? i + 1 : i - 1;    // up = toward the top (end)
+    if (j < 0 || j >= layers.length) return;
+    [layers[i], layers[j]] = [layers[j], layers[i]];
+    render();
+    renderLayers();
+    commit(`Reorder layers`);
+    return;
+  }
+
+  if (t.dataset.del) {                     // delete layer + its pieces
+    const id = +t.dataset.del;
+    if (layers.length === 1) {
+      statusEl.textContent = "Can't delete the only layer";
+      return;
+    }
+    const L = layers[layerIndex(id)];
+    const lockedHere = pieces.some(p => p.layer === id && p.locked);
+    if (lockedHere) {
+      statusEl.textContent =
+        `"${L.name}" contains locked pieces — unlock them before deleting the layer`;
+      return;
+    }
+    layers = layers.filter(q => q.id !== id);
+    pieces = pieces.filter(p => p.layer !== id);
+    hiddenLayerIds.delete(id);
+    selection = selection.filter(p => p.layer !== id);
+    if (activeLayerId === id) activeLayerId = layers[layers.length - 1].id;
+    render();
+    renderLayers();
+    commit(`Delete layer "${L.name}"`);
+    return;
+  }
+
+  const li = t.closest("li[data-layer]");  // row click: set active layer
+  if (li) {
+    activeLayerId = +li.dataset.layer;
+    renderLayers();
+    const L = layers[layerIndex(activeLayerId)];
+    statusEl.textContent = `"${L.name}" is now the active layer — new pieces land here`;
+  }
+});
+
+document.getElementById("btn-add-layer").addEventListener("click", () => {
+  const L = { id: nextLayerId, name: `Layer ${nextLayerId}` };
+  nextLayerId++;
+  layers.push(L);                          // new layers go on top
+  activeLayerId = L.id;
+  renderLayers();
+  commit(`Add layer "${L.name}"`);
+  statusEl.textContent =
+    `"${L.name}" added on top — its pieces will be opaque and hide layers below`;
+});
+
+document.getElementById("btn-move-layer").addEventListener("click", () => {
+  if (!selection.length) {
+    statusEl.textContent = "Select pieces first, then send them to the highlighted layer";
+    return;
+  }
+  const movable = unlockedSelection().filter(p => p.layer !== activeLayerId);
+  if (!movable.length) {
+    statusEl.textContent = unlockedSelection().length
+      ? "Selection is already on the active layer"
+      : "Selected pieces are locked — unlock them to move between layers";
+    return;
+  }
+  const L = layers[layerIndex(activeLayerId)];
+  movable.forEach(p => { p.layer = activeLayerId; });
+  render();
+  commit(movable.length === 1
+    ? `Move ${movable[0].kind} to "${L.name}"`
+    : `Move ${movable.length} pieces to "${L.name}"`);
+});
+
+/* ============================ geometry ================================= */
+
+function regularPolygon(cx, cy, r, sides, start = -Math.PI / 2) {
+  const pts = [];
+  for (let i = 0; i < sides; i++) {
+    const a = start + (2 * Math.PI * i) / sides;
+    pts.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
+  }
+  return pts;
+}
+
+function ellipsePoints(cx, cy, rx, ry, n = 8) {
+  const pts = [];
+  for (let i = 0; i < n; i++) {
+    const a = (2 * Math.PI * i) / n;
+    pts.push([cx + rx * Math.cos(a), cy + ry * Math.sin(a)]);
+  }
+  return pts;
+}
+
+/* Closed Catmull-Rom spline -> cubic bezier path, for the ellipse tool. */
+function smoothClosedPath(pts) {
+  const n = pts.length;
+  let d = `M ${pts[0][0]} ${pts[0][1]} `;
+  for (let i = 0; i < n; i++) {
+    const p0 = pts[(i - 1 + n) % n];
+    const p1 = pts[i];
+    const p2 = pts[(i + 1) % n];
+    const p3 = pts[(i + 2) % n];
+    const c1 = [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6];
+    const c2 = [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6];
+    d += `C ${c1[0]} ${c1[1]}, ${c2[0]} ${c2[1]}, ${p2[0]} ${p2[1]} `;
+  }
+  return d + "Z";
+}
+
+function piecePath(p) {
+  const pts = p.points;
+  switch (p.kind) {
+    case "polygon":
+      return "M " + pts.map(q => q.join(" ")).join(" L ") + " Z";
+    case "path":                       // open polyline (result of slicing)
+      return "M " + pts.map(q => q.join(" ")).join(" L ");
+    case "ellipse":
+      return smoothClosedPath(pts);
+    case "line":
+    case "guide":
+      return `M ${pts[0][0]} ${pts[0][1]} L ${pts[1][0]} ${pts[1][1]}`;
+    case "curve":
+      return `M ${pts[0][0]} ${pts[0][1]} Q ${pts[1][0]} ${pts[1][1]} ${pts[2][0]} ${pts[2][1]}`;
+  }
+}
+
+/* Padded bounding box of a piece, used for the transform frame.
+   The padding also guarantees the box is never degenerate (e.g. for a
+   perfectly horizontal line), so scale math never divides by zero. */
+const TF_PAD = 16;
+const ROT_STALK = 26;
+
+function bboxOf(piece, pad = TF_PAD) {
+  const xs = piece.points.map(p => p[0]);
+  const ys = piece.points.map(p => p[1]);
+  const x0 = Math.min(...xs) - pad, x1 = Math.max(...xs) + pad;
+  const y0 = Math.min(...ys) - pad, y1 = Math.max(...ys) + pad;
+  return { x0, y0, x1, y1, cx: (x0 + x1) / 2, cy: (y0 + y1) / 2 };
+}
+
+function bboxCorners(b) {
+  return [[b.x0, b.y0], [b.x1, b.y0], [b.x1, b.y1], [b.x0, b.y1]];
+}
+
+/* Padded bounding box around several pieces at once (group selections). */
+function bboxOfGroup(list, pad = TF_PAD) {
+  const xs = [], ys = [];
+  for (const p of list) for (const q of p.points) { xs.push(q[0]); ys.push(q[1]); }
+  const x0 = Math.min(...xs) - pad, x1 = Math.max(...xs) + pad;
+  const y0 = Math.min(...ys) - pad, y1 = Math.max(...ys) + pad;
+  return { x0, y0, x1, y1, cx: (x0 + x1) / 2, cy: (y0 + y1) / 2 };
+}
+
+/* Transform frame markup (dashed box, rotate knob, corner resize dots) —
+   shared by single-piece and group selections. */
+function frameChrome(b) {
+  const cursors = ["nwse-resize", "nesw-resize", "nwse-resize", "nesw-resize"];
+  let h = `<rect x="${b.x0}" y="${b.y0}" width="${b.x1 - b.x0}" height="${b.y1 - b.y0}"
+    fill="none" stroke="${AMBER}" stroke-width="1" stroke-dasharray="5 4" opacity=".65"/>`;
+  h += `<line x1="${b.cx}" y1="${b.y0}" x2="${b.cx}" y2="${b.y0 - ROT_STALK + 6}"
+    stroke="${AMBER}" stroke-width="1" opacity=".65"/>`;
+  h += `<circle class="rot-handle" cx="${b.cx}" cy="${b.y0 - ROT_STALK}" r="6.5"
+    fill="${AMBER}" stroke="#fff" stroke-width="2"/>`;
+  bboxCorners(b).forEach(([hx, hy], i) => {
+    h += `<circle class="tf-handle" data-corner="${i}" cx="${hx}" cy="${hy}"
+      r="${HANDLE_R}" fill="#fff" stroke="${AMBER}" stroke-width="2"
+      style="cursor:${cursors[i]}"/>`;
+  });
+  return h;
+}
+
+/* Length in pixels of an open piece (line, quadratic curve, or path). */
+function openLength(p) {
+  if (p.kind === "line" || p.kind === "path" || p.kind === "guide") {
+    let len = 0;
+    for (let i = 1; i < p.points.length; i++) {
+      len += Math.hypot(p.points[i][0] - p.points[i - 1][0],
+                        p.points[i][1] - p.points[i - 1][1]);
+    }
+    return len;
+  }
+  if (p.kind === "curve") {
+    const [a, c, b] = p.points;
+    let len = 0;
+    let px = a[0], py = a[1];
+    for (let i = 1; i <= 24; i++) {
+      const t = i / 24, mt = 1 - t;
+      const x = mt * mt * a[0] + 2 * mt * t * c[0] + t * t * b[0];
+      const y = mt * mt * a[1] + 2 * mt * t * c[1] + t * t * b[1];
+      len += Math.hypot(x - px, y - py);
+      px = x; py = y;
+    }
+    return len;
+  }
+  return 0;
+}
+
+/* SVG label showing an open piece's length in grid squares, floated just
+   above the middle of the path. */
+function lengthLabel(p, color) {
+  const squares = openLength(p) / gridSize;
+  const pts = p.points;
+  let mx, my;
+  if (p.kind === "curve") {          // point on the bezier at t = 0.5
+    const [a, c, b] = pts;
+    mx = 0.25 * a[0] + 0.5 * c[0] + 0.25 * b[0];
+    my = 0.25 * a[1] + 0.5 * c[1] + 0.25 * b[1];
+  } else if (p.kind === "path") {    // middle vertex of the polyline
+    const m = pts[Math.floor(pts.length / 2)];
+    mx = m[0]; my = m[1];
+  } else {
+    mx = (pts[0][0] + pts[1][0]) / 2;
+    my = (pts[0][1] + pts[1][1]) / 2;
+  }
+  return `<text x="${mx}" y="${my - 12}" text-anchor="middle"
+    font-size="12.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+    font-weight="600" fill="${color}" stroke="#f6f1e6" stroke-width="3.5"
+    paint-order="stroke" style="pointer-events:none">${squares.toFixed(2)} sq</text>`;
+}
+
+/* ============================ rendering ================================ */
+
+function render() {
+  let html = "";
+
+  const stacked = stackedPieces().filter(layerVisible);
+
+  for (const p of stacked) {
+    const sel = isSelected(p);
+    const isGuide = isGuidePiece(p);
+    const stroke = sel ? AMBER : (isGuide ? GUIDE : LEAD);
+    const d = piecePath(p);
+    const closed = p.kind === "polygon" || p.kind === "ellipse";
+
+    // base layer stays translucent glass; upper layers are opaque and
+    // fully hide whatever sits beneath them (see pieceFill)
+    const fill = pieceFill(p);
+
+    html += `<path class="piece${p.locked ? " locked" : ""}" data-id="${p.id}" d="${d}"
+      fill="${fill}" stroke="${stroke}"
+      stroke-width="${isGuide ? GUIDE_WIDTH : thickness}"
+      ${isGuide ? `stroke-dasharray="${GUIDE_DASH}" opacity="${sel ? 1 : 0.9}"` : ""}
+      stroke-linejoin="round" stroke-linecap="round"/>`;
+
+    // fat invisible twin so thin open lines are easy to grab
+    if (!closed) {
+      html += `<path class="hitline" data-id="${p.id}" d="${d}"
+        stroke-width="${Math.max(thickness + 12, 16)}"/>`;
+    }
+  }
+
+  // padlock toggles at each piece's anchor — hidden until that piece is
+  // hovered (locked pieces also stay shown while selected)
+  for (const p of stacked) {
+    const [lx, ly] = lockAnchor(p);
+    const shown = p.id === hoveredId || (p.locked && isSelected(p));
+    const shackle = p.locked
+      ? "M -2.5 -1.5 v -2 a 2.5 2.5 0 0 1 5 0 v 2"     // closed
+      : "M -2.5 -1.5 v -2 a 2.5 2.5 0 0 1 5 0 v -1.2"; // right leg lifted
+    html += `<g class="lock-btn${shown ? " show" : ""}" data-id="${p.id}"
+        transform="translate(${lx} ${ly})" style="--lk:${p.locked ? 1 : 0.55}">
+      <circle r="9" fill="#fff" stroke="${p.locked ? AMBER : LEAD}"
+        stroke-width="${p.locked ? 1.8 : 1}" opacity=".88"/>
+      <rect x="-4" y="-1.5" width="8" height="6.5" rx="1.2"
+        fill="${p.locked ? LEAD : "none"}" stroke="${LEAD}" stroke-width="1.4"/>
+      <path d="${shackle}" fill="none" stroke="${LEAD}"
+        stroke-width="1.4" stroke-linecap="round"/>
+    </g>`;
+  }
+
+  // rubber-band preview while drawing a new line/curve/guide, with live length
+  if (drag && drag.mode === "new") {
+    const g = isGuidePiece(drag.piece);
+    html += `<path d="${piecePath(drag.piece)}" fill="none"
+      stroke="${g ? GUIDE : LEAD}" stroke-width="${g ? GUIDE_WIDTH : thickness}"
+      ${g ? `stroke-dasharray="${GUIDE_DASH}"` : ""}
+      stroke-linecap="round" opacity="0.6"/>`;
+    html += lengthLabel(drag.piece, g ? GUIDE : LEAD);
+  }
+
+  // selection chrome: single piece gets vertex handles; groups get one
+  // shared frame that transforms every (unlocked) member together
+  const sole = soleSelected();
+  if (sole && sole.locked) {
+    // locked: show selection, but offer no way to move or transform
+    const b = bboxOf(sole);
+    html += `<rect x="${b.x0}" y="${b.y0}" width="${b.x1 - b.x0}" height="${b.y1 - b.y0}"
+      fill="none" stroke="${LEAD}" stroke-width="1" stroke-dasharray="3 5" opacity=".4"/>`;
+    if (["line", "curve", "path", "guide"].includes(sole.kind)) {
+      html += lengthLabel(sole, LEAD);
+    }
+  } else if (sole) {
+    html += frameChrome(bboxOf(sole));
+
+    // vertex handles (skipped for dense sliced paths — use the frame instead)
+    if (sole.points.length <= 24) {
+      sole.points.forEach((pt, i) => {
+        const isCtrl = sole.kind === "curve" && i === 1;
+        if (isCtrl) {
+          html += `<circle class="handle" data-index="${i}" cx="${pt[0]}" cy="${pt[1]}"
+            r="${HANDLE_R}" fill="#fff" stroke="${AMBER}" stroke-width="2"/>`;
+        } else {
+          html += `<rect class="handle" data-index="${i}"
+            x="${pt[0] - HANDLE_R}" y="${pt[1] - HANDLE_R}"
+            width="${HANDLE_R * 2}" height="${HANDLE_R * 2}"
+            fill="#fff" stroke="${AMBER}" stroke-width="2"/>`;
+        }
+      });
+    }
+
+    // live length readout for lines, guides, curves, and sliced paths
+    if (["line", "curve", "path", "guide"].includes(sole.kind)) {
+      html += lengthLabel(sole, AMBER);
+    }
+  } else if (selection.length > 1) {
+    html += frameChrome(bboxOfGroup(selection));
+  }
+
+  // marquee rubber-band while drag-selecting
+  if (drag && drag.mode === "marquee") {
+    const [mx0, my0] = drag.start, [mx1, my1] = drag.cur;
+    html += `<rect x="${Math.min(mx0, mx1)}" y="${Math.min(my0, my1)}"
+      width="${Math.abs(mx1 - mx0)}" height="${Math.abs(my1 - my0)}"
+      fill="rgba(201,120,31,.08)" stroke="${AMBER}" stroke-width="1"
+      stroke-dasharray="4 3"/>`;
+  }
+
+  stage.innerHTML = html;
+}
+
+/* ============================ interaction ============================== */
+
+// view zoom: scroll wheel over the canvas (view-only, never saved)
+let zoom = 1;
+const ZOOM_MIN = 0.2, ZOOM_MAX = 5;
+const WRAP_PAD = 14;               // #stage-wrap padding, used for anchoring
+
+function svgPoint(evt) {
+  const r = stage.getBoundingClientRect();   // rect is in screen (zoomed) px
+  return [(evt.clientX - r.left) / zoom, (evt.clientY - r.top) / zoom];
+}
+
+function applyZoom() {
+  const sizer = document.getElementById("zoom-sizer");
+  sizer.style.width = canvasW * zoom + "px";
+  sizer.style.height = canvasH * zoom + "px";
+  board.style.transform = `scale(${zoom})`;
+  document.getElementById("zoom-badge").textContent =
+    Math.round(zoom * 100) + "%";
+}
+
+/* Zoom toward an anchor given in stage-wrap viewport coordinates, keeping
+   the world point under the anchor fixed on screen. */
+function setZoom(nz, anchorX, anchorY) {
+  nz = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, nz));
+  if (nz === zoom) return;
+  const wrap = document.getElementById("stage-wrap");
+  const worldX = (wrap.scrollLeft + anchorX - WRAP_PAD) / zoom;
+  const worldY = (wrap.scrollTop + anchorY - WRAP_PAD) / zoom;
+  zoom = nz;
+  applyZoom();
+  wrap.scrollLeft = worldX * zoom + WRAP_PAD - anchorX;
+  wrap.scrollTop = worldY * zoom + WRAP_PAD - anchorY;
+}
+
+function pieceById(id) {
+  return pieces.find(p => p.id === +id) || null;
+}
+
+function nextFill() {
+  return GLASS[paletteIdx++ % GLASS.length];
+}
+
+function placeShape(kind, x, y) {
+  const r = DEFAULT_RADIUS;
+  let piece;
+  if (kind === "ellipse") {
+    piece = { kind: "ellipse", points: ellipsePoints(x, y, r * 1.2, r * 0.8) };
+  } else if (kind === "triangle") {
+    piece = { kind: "polygon", points: regularPolygon(x, y, r, 3) };
+  } else if (kind === "rect") {
+    piece = { kind: "polygon", points: [
+      [x - r, y - r * 0.7], [x + r, y - r * 0.7],
+      [x + r, y + r * 0.7], [x - r, y + r * 0.7]] };
+  } else if (kind === "pentagon") {
+    piece = { kind: "polygon", points: regularPolygon(x, y, r, 5) };
+  } else if (kind === "hexagon") {
+    piece = { kind: "polygon", points: regularPolygon(x, y, r, 6) };
+  } else return;
+
+  piece.id = nextId++;
+  piece.fill = nextFill();
+  piece.layer = activeLayerId;
+  pieces.push(piece);
+  selection = [piece];
+  setTool("select");
+  render();
+  commit(`Add ${kind === "rect" ? "rectangle" : kind}`);
+}
+
+stage.addEventListener("pointerdown", evt => {
+  if (evt.button !== 0) return;             // middle button pans, right = menu
+  evt.preventDefault();
+  const [x, y] = svgPoint(evt);
+  const [gx, gy] = snapPt(x, y);            // grid-snapped when snapping is on
+
+  // padlock toggles win over everything, in any tool.
+  // Locking is a protection setting, not an edit — it isn't recorded in
+  // history, and lockedIds keeps it stable across undo/redo.
+  const lockHit = evt.target.closest ? evt.target.closest(".lock-btn") : null;
+  if (lockHit) {
+    const piece = pieceById(lockHit.dataset.id);
+    if (piece) {
+      piece.locked = !piece.locked;
+      piece.locked ? lockedIds.add(piece.id) : lockedIds.delete(piece.id);
+      statusEl.textContent = piece.locked
+        ? `${piece.kind} locked — it can't be moved or transformed until unlocked`
+        : `${piece.kind} unlocked`;
+      render();
+    }
+    return;
+  }
+
+  // paint bucket: flood the clicked segment (raw coords — no snapping)
+  if (tool === "bucket") {
+    floodFill(x, y);
+    return;
+  }
+
+  // slice: erase the span of a lead line between its nearest crossings
+  if (tool === "slice") {
+    sliceAt(x, y);
+    return;
+  }
+
+  // placing a closed shape
+  if (["ellipse", "triangle", "rect", "pentagon", "hexagon"].includes(tool)) {
+    placeShape(tool, gx, gy);
+    return;
+  }
+
+  // starting a new line / guide / curve / guide curve
+  if (["line", "guide", "curve", "gcurve"].includes(tool)) {
+    const isCurve = tool === "curve" || tool === "gcurve";
+    const piece = isCurve
+      ? { kind: "curve", points: [[gx, gy], [gx, gy], [gx, gy]] }
+      : { kind: "line",  points: [[gx, gy], [gx, gy]] };
+    if (tool === "guide" || tool === "gcurve") piece.guide = true;
+    drag = { mode: "new", piece };
+    stage.setPointerCapture(evt.pointerId);
+    return;
+  }
+
+  // ---- select tool ----
+  const t = evt.target;
+  const selMembers = () =>
+    unlockedSelection().map(p => ({ p, pts: p.points.map(q => [...q]) }));
+
+  if (t.classList.contains("tf-handle") && selection.length) {
+    const members = selMembers();
+    if (!members.length) return;
+    const corner = +t.dataset.corner;
+    const anchor = bboxCorners(bboxOfGroup(selection))[(corner + 2) % 4];
+    drag = { mode: "scale", anchor, start: [x, y], members, moved: false };
+    stage.setPointerCapture(evt.pointerId);
+    return;
+  }
+
+  if (t.classList.contains("rot-handle") && selection.length) {
+    const members = selMembers();
+    if (!members.length) return;
+    const b = bboxOfGroup(selection);
+    drag = {
+      mode: "rotate", center: [b.cx, b.cy],
+      startAngle: Math.atan2(y - b.cy, x - b.cx),
+      members, moved: false,
+    };
+    stage.setPointerCapture(evt.pointerId);
+    return;
+  }
+
+  if (t.classList.contains("handle")) {
+    drag = { mode: "vertex", index: +t.dataset.index, moved: false };
+    stage.setPointerCapture(evt.pointerId);
+    return;
+  }
+
+  if (t.dataset && t.dataset.id) {
+    const piece = pieceById(t.dataset.id);
+    if (evt.shiftKey) {                    // shift-click toggles membership
+      selection = isSelected(piece)
+        ? selection.filter(q => q !== piece)
+        : [...selection, piece];
+      render();
+      return;
+    }
+    if (!isSelected(piece)) selection = [piece];
+    if (piece.locked && selection.length === 1) {
+      drag = null;
+      statusEl.textContent =
+        `This ${piece.kind} is locked — click its padlock to unlock`;
+      render();
+      return;
+    }
+    const members = selMembers();
+    if (!members.length) { render(); return; }
+    drag = { mode: "body", startPointer: [x, y], members, moved: false };
+    stage.setPointerCapture(evt.pointerId);
+    render();
+    return;
+  }
+
+  // empty paper: drag a marquee to select (Shift adds to the selection)
+  drag = { mode: "marquee", start: [x, y], cur: [x, y], additive: evt.shiftKey };
+  stage.setPointerCapture(evt.pointerId);
+  render();
+});
+
+const coordEl = document.getElementById("coord");
+
+// which piece's padlock is revealed (hover-tracked)
+let hoveredId = null;
+
+/* Where a piece's padlock sits. Closed shapes use the centroid; open pieces
+   use a point ON the path so the pointer can travel from stroke to chip
+   without crossing empty space (which would hide the chip en route). */
+function lockAnchor(p) {
+  if (p.kind === "curve") {            // on-curve point at t = 0.5
+    const [a, c, b] = p.points;
+    return [0.25 * a[0] + 0.5 * c[0] + 0.25 * b[0],
+            0.25 * a[1] + 0.5 * c[1] + 0.25 * b[1]];
+  }
+  if (p.kind === "path") {             // middle vertex of the polyline
+    return [...p.points[Math.floor(p.points.length / 2)]];
+  }
+  const n = p.points.length;           // centroid (= midpoint for 2-point kinds)
+  return [p.points.reduce((s, q) => s + q[0], 0) / n,
+          p.points.reduce((s, q) => s + q[1], 0) / n];
+}
+
+function updateLockHover(id) {
+  if (id === hoveredId) return;
+  hoveredId = id;
+  stage.querySelectorAll(".lock-btn").forEach(g => {
+    const pid = +g.dataset.id;
+    const piece = pieceById(pid);
+    const pinned = piece && piece.locked && isSelected(piece);
+    g.classList.toggle("show", pid === hoveredId || pinned);
+  });
+}
+
+function hoverIdFromEvent(evt) {
+  const t = evt.target;
+  if (!t || !t.closest) return null;
+  const lock = t.closest(".lock-btn");
+  if (lock) return +lock.dataset.id;
+  if (t.dataset && t.dataset.id) return +t.dataset.id;
+  return null;
+}
+
+function updateCoord(x, y) {
+  const col = Math.floor(x / gridSize);
+  const row = Math.floor(y / gridSize);
+  coordEl.textContent = `${col}, ${row}`;
+}
+
+stage.addEventListener("pointerenter", evt => {
+  coordEl.style.display = "block";
+  const [x, y] = svgPoint(evt);
+  updateCoord(x, y);
+});
+stage.addEventListener("pointerleave", () => {
+  coordEl.style.display = "none";
+  updateLockHover(null);
+});
+
+// scroll wheel zooms the view, anchored at the cursor
+{
+  const wrap = document.getElementById("stage-wrap");
+  wrap.addEventListener("wheel", evt => {
+    evt.preventDefault();
+    const rect = wrap.getBoundingClientRect();
+    const delta = evt.deltaMode === 1 ? evt.deltaY * 16 : evt.deltaY;
+    setZoom(zoom * Math.exp(-delta * 0.0015),
+            evt.clientX - rect.left, evt.clientY - rect.top);
+  }, { passive: false });
+
+  document.getElementById("zoom-badge").addEventListener("click", () => {
+    const rect = wrap.getBoundingClientRect();
+    setZoom(1, rect.width / 2, rect.height / 2);   // reset, anchored center
+  });
+
+  // middle-button drag pans the view
+  let pan = null;   // { startX, startY, scrollX, scrollY }
+  wrap.addEventListener("pointerdown", evt => {
+    if (evt.button !== 1) return;
+    evt.preventDefault();                    // suppress autoscroll mode
+    pan = { startX: evt.clientX, startY: evt.clientY,
+            scrollX: wrap.scrollLeft, scrollY: wrap.scrollTop };
+    wrap.setPointerCapture(evt.pointerId);
+    wrap.style.cursor = "grabbing";
+  });
+  wrap.addEventListener("pointermove", evt => {
+    if (!pan) return;
+    wrap.scrollLeft = pan.scrollX - (evt.clientX - pan.startX);
+    wrap.scrollTop = pan.scrollY - (evt.clientY - pan.startY);
+  });
+  const endPan = () => { pan = null; wrap.style.cursor = ""; };
+  wrap.addEventListener("pointerup", endPan);
+  wrap.addEventListener("pointercancel", endPan);
+  // some browsers still fire autoscroll on the raw mousedown
+  wrap.addEventListener("mousedown", evt => {
+    if (evt.button === 1) evt.preventDefault();
+  });
+}
+
+stage.addEventListener("pointermove", evt => {
+  {
+    const [cx, cy] = svgPoint(evt);
+    updateCoord(cx, cy);              // hovered grid square, drag or not
+  }
+  if (!drag) updateLockHover(hoverIdFromEvent(evt));   // reveal padlocks
+  if (!drag) return;
+  const [x, y] = svgPoint(evt);
+
+  if (drag.mode === "new") {
+    const [gx, gy] = snapPt(x, y);
+    const pts = drag.piece.points;
+    const last = pts[pts.length - 1];
+    last[0] = gx; last[1] = gy;
+    if (drag.piece.kind === "curve") {
+      pts[1][0] = (pts[0][0] + pts[2][0]) / 2;   // keep it straight while drawing
+      pts[1][1] = (pts[0][1] + pts[2][1]) / 2;
+    }
+    render();
+  } else if (drag.mode === "marquee") {
+    drag.cur = [x, y];
+    render();
+  } else if (drag.mode === "scale" && drag.members) {
+    const [gx, gy] = snapPt(x, y);              // dragged corner lands on the grid
+    const [ax, ay] = drag.anchor;
+    let sx = (gx - ax) / (drag.start[0] - ax);
+    let sy = (gy - ay) / (drag.start[1] - ay);
+    if (evt.shiftKey) {                       // uniform scale
+      const s = Math.max(Math.abs(sx), Math.abs(sy));
+      sx = (Math.sign(sx) || 1) * s;
+      sy = (Math.sign(sy) || 1) * s;
+    }
+    for (const m of drag.members) {
+      m.p.points = m.pts.map(
+        ([px, py]) => [ax + (px - ax) * sx, ay + (py - ay) * sy]);
+    }
+    drag.moved = true;
+    render();
+  } else if (drag.mode === "rotate" && drag.members) {
+    const [cx, cy] = drag.center;
+    let a = Math.atan2(y - cy, x - cx) - drag.startAngle;
+    if (evt.shiftKey || snapOn) {             // snap to 15 degree steps
+      const step = Math.PI / 12;
+      a = Math.round(a / step) * step;
+    }
+    const cos = Math.cos(a), sin = Math.sin(a);
+    for (const m of drag.members) {
+      m.p.points = m.pts.map(([px, py]) => {
+        const dx = px - cx, dy = py - cy;
+        return [cx + dx * cos - dy * sin, cy + dx * sin + dy * cos];
+      });
+    }
+    drag.moved = true;
+    render();
+  } else if (drag.mode === "vertex") {
+    const sole = soleSelected();
+    if (!sole || sole.locked) return;
+    const [gx, gy] = snapPt(x, y);
+    sole.points[drag.index][0] = gx;
+    sole.points[drag.index][1] = gy;
+    drag.moved = true;
+    render();
+  } else if (drag.mode === "body" && drag.members) {
+    const dx = x - drag.startPointer[0];
+    const dy = y - drag.startPointer[1];
+    if (dx || dy) drag.moved = true;
+    let shifted = drag.members.map(m =>
+      m.pts.map(([px, py]) => [px + dx, py + dy]));
+    if (snapOn) {
+      // nudge the whole group so its top-left corner sits on a grid line
+      const flat = shifted.flat();
+      const minX = Math.min(...flat.map(q => q[0]));
+      const minY = Math.min(...flat.map(q => q[1]));
+      const ox = snap1(minX) - minX;
+      const oy = snap1(minY) - minY;
+      shifted = shifted.map(pts => pts.map(([px, py]) => [px + ox, py + oy]));
+    }
+    drag.members.forEach((m, i) => { m.p.points = shifted[i]; });
+    render();
+  }
+});
+
+stage.addEventListener("pointerup", () => {
+  if (!drag) return;
+  let committed = null;
+
+  if (drag.mode === "new") {
+    const pts = drag.piece.points;
+    const len = Math.hypot(pts[0][0] - pts[pts.length - 1][0],
+                           pts[0][1] - pts[pts.length - 1][1]);
+    if (len > 4) {                          // ignore accidental clicks
+      drag.piece.id = nextId++;
+      drag.piece.fill = "";
+      drag.piece.layer = activeLayerId;
+      pieces.push(drag.piece);
+      selection = [drag.piece];
+      setTool("select");
+      committed = isGuidePiece(drag.piece)
+        ? (drag.piece.kind === "curve" ? "Draw guide curve" : "Draw guideline")
+        : `Draw ${drag.piece.kind}`;
+    }
+  } else if (drag.mode === "marquee") {
+    const [mx0, my0] = drag.start, [mx1, my1] = drag.cur;
+    const rx0 = Math.min(mx0, mx1), rx1 = Math.max(mx0, mx1);
+    const ry0 = Math.min(my0, my1), ry1 = Math.max(my0, my1);
+    if (rx1 - rx0 < 3 && ry1 - ry0 < 3) {
+      if (!drag.additive) selection = [];          // plain click on paper
+    } else {
+      const hit = stackedPieces().filter(layerVisible).filter(p => {
+        const b = bboxOf(p, 0);
+        return b.x0 <= rx1 && b.x1 >= rx0 && b.y0 <= ry1 && b.y1 >= ry0;
+      });
+      selection = drag.additive
+        ? [...new Set([...selection, ...hit])] : hit;
+      if (selection.length) {
+        statusEl.textContent =
+          `${selection.length} piece${selection.length > 1 ? "s" : ""} selected` +
+          ` — drag the frame to move, resize, or rotate them together`;
+      }
+    }
+  } else if (drag.mode === "vertex" && drag.moved) {
+    committed = "Skew vertex";
+  } else if (drag.mode === "scale" && drag.moved && drag.members) {
+    committed = drag.members.length === 1
+      ? `Resize ${drag.members[0].p.kind}` : `Resize ${drag.members.length} pieces`;
+  } else if (drag.mode === "rotate" && drag.moved && drag.members) {
+    committed = drag.members.length === 1
+      ? `Rotate ${drag.members[0].p.kind}` : `Rotate ${drag.members.length} pieces`;
+  } else if (drag.mode === "body" && drag.moved && drag.members) {
+    committed = drag.members.length === 1
+      ? `Move ${drag.members[0].p.kind}` : `Move ${drag.members.length} pieces`;
+  }
+
+  drag = null;
+  render();
+  if (committed) commit(committed);
+});
+
+function deleteSelected() {
+  if (!selection.length) return;
+  const removable = unlockedSelection();
+  if (!removable.length) {
+    statusEl.textContent = selection.length === 1
+      ? `This ${selection[0].kind} is locked — unlock it before deleting`
+      : "The selected pieces are locked — unlock them before deleting";
+    return;
+  }
+  const label = removable.length === 1
+    ? `Delete ${removable[0].kind}` : `Delete ${removable.length} pieces`;
+  pieces = pieces.filter(p => !removable.includes(p));
+  selection = selection.filter(p => !removable.includes(p));
+  render();
+  commit(label);
+}
+
+/* ========================== copy / paste =============================== */
+
+function copySelected() {
+  if (!selection.length) return;
+  clipboard = JSON.parse(JSON.stringify(selection.map(p => ({
+    kind: p.kind, points: p.points, fill: p.fill,
+    guide: p.guide || undefined,
+  }))));
+  pasteCount = 0;
+  statusEl.textContent = clipboard.length === 1
+    ? `Copied ${clipboard[0].kind} — Ctrl+V to paste`
+    : `Copied ${clipboard.length} pieces — Ctrl+V to paste`;
+}
+
+function pasteClipboard() {
+  if (!clipboard || (Array.isArray(clipboard) && !clipboard.length)) {
+    statusEl.textContent = "Nothing to paste — copy a piece first (Ctrl+C)";
+    return;
+  }
+  pasteCount++;
+  const off = 24 * pasteCount;              // each paste steps down-right
+  const entries = Array.isArray(clipboard) ? clipboard : [clipboard];
+  const pasted = entries.map(entry => {
+    const piece = JSON.parse(JSON.stringify(entry));
+    piece.points = piece.points.map(([px, py]) => [px + off, py + off]);
+    piece.id = nextId++;
+    piece.layer = activeLayerId;
+    pieces.push(piece);
+    return piece;
+  });
+  selection = pasted;
+  setTool("select");
+  render();
+  commit(pasted.length === 1
+    ? `Paste ${pasted[0].kind}` : `Paste ${pasted.length} pieces`);
+}
+
+/* ====================== canvas + grid settings ========================= */
+
+function applyCanvasSize() {
+  // preserve existing paint across a resize (setting width clears a canvas)
+  let saved = null;
+  if (pctx && paintCanvas.width > 0 && paintCanvas.height > 0) {
+    saved = document.createElement("canvas");
+    saved.width = paintCanvas.width;
+    saved.height = paintCanvas.height;
+    saved.getContext("2d").drawImage(paintCanvas, 0, 0);
+  }
+
+  board.style.width = canvasW + "px";
+  board.style.height = canvasH + "px";
+  stage.setAttribute("width", canvasW);
+  stage.setAttribute("height", canvasH);
+  stage.style.width = canvasW + "px";
+  stage.style.height = canvasH + "px";
+  paintCanvas.width = canvasW;
+  paintCanvas.height = canvasH;
+  applyZoom();                     // sizer footprint tracks canvas × zoom
+
+  if (saved && pctx) pctx.drawImage(saved, 0, 0);
+}
+
+function applyGrid() {
+  board.style.backgroundSize =
+    `100% ${gridSize}px, ${gridSize}px 100%`;
+}
+
+/* =========================== paint bucket ============================== */
+
+function hexToRgb(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+/* Pure region-grow: from seedIdx, collect all 4-connected pixels for which
+   isBoundary(i) is false. Returns a Uint8Array marking the region. */
+function floodRegion(seedIdx, W, H, isBoundary) {
+  const visited = new Uint8Array(W * H);
+  const stack = [seedIdx];
+  visited[seedIdx] = 1;
+  while (stack.length) {
+    const i = stack.pop();
+    const ix = i % W;
+    if (ix > 0)      { const j = i - 1; if (!visited[j] && !isBoundary(j)) { visited[j] = 1; stack.push(j); } }
+    if (ix < W - 1)  { const j = i + 1; if (!visited[j] && !isBoundary(j)) { visited[j] = 1; stack.push(j); } }
+    if (i >= W)      { const j = i - W; if (!visited[j] && !isBoundary(j)) { visited[j] = 1; stack.push(j); } }
+    if (i < W * (H - 1)) { const j = i + W; if (!visited[j] && !isBoundary(j)) { visited[j] = 1; stack.push(j); } }
+  }
+  return visited;
+}
+
+function floodFill(x, y) {
+  if (!pctx) return;
+  const W = canvasW, H = canvasH;
+  const sx = Math.floor(x), sy = Math.floor(y);
+  if (sx < 0 || sy < 0 || sx >= W || sy >= H) return;
+
+  // rasterize every lead line into a boundary mask at the current thickness
+  const bc = document.createElement("canvas");
+  bc.width = W; bc.height = H;
+  const bctx = bc.getContext("2d");
+  bctx.lineJoin = "round";
+  bctx.lineCap = "round";
+  bctx.lineWidth = Math.max(thickness, 2);
+  bctx.strokeStyle = "#000";
+  for (const p of pieces) {
+    if (isGuidePiece(p)) continue;      // guides never seal paint regions
+    if (layerVisible(p)) bctx.stroke(new Path2D(piecePath(p)));
+  }
+  const bd = bctx.getImageData(0, 0, W, H).data;
+  const isBoundary = i => bd[i * 4 + 3] > 32;
+
+  const seedIdx = sy * W + sx;
+  if (isBoundary(seedIdx)) {
+    statusEl.textContent = "That's a lead line — click inside a segment to fill it";
+    return;
+  }
+
+  const region = floodRegion(seedIdx, W, H, isBoundary);
+  const img = pctx.getImageData(0, 0, W, H);
+  const px = img.data;
+  const [r, g, b] = hexToRgb(paintColor);
+  const erase = paintColor.toLowerCase() === "#ffffff";
+  for (let i = 0; i < region.length; i++) {
+    if (!region[i]) continue;
+    const o = i * 4;
+    if (erase) {
+      px[o + 3] = 0;                       // white = wipe the segment clean
+    } else {
+      px[o] = r; px[o + 1] = g; px[o + 2] = b; px[o + 3] = 255;
+    }
+  }
+  pctx.putImageData(img, 0, 0);
+
+  if (!paintVisible) {
+    statusEl.textContent = "Filled — but the paint layer is hidden; toggle it on to see";
+  }
+}
+
+/* ============================ slice tool =============================== */
+
+/* Sample any piece's outline as a polyline. Curved kinds are sampled
+   densely enough that slicing at intersections is visually exact. */
+function outlinePolyline(p) {
+  switch (p.kind) {
+    case "line":
+    case "guide":
+    case "path":
+      return { pts: p.points.map(q => [...q]), closed: false };
+    case "polygon":
+      return { pts: p.points.map(q => [...q]), closed: true };
+    case "curve": {
+      const [a, c, b] = p.points;
+      const pts = [];
+      for (let i = 0; i <= 48; i++) {
+        const t = i / 48, mt = 1 - t;
+        pts.push([mt * mt * a[0] + 2 * mt * t * c[0] + t * t * b[0],
+                  mt * mt * a[1] + 2 * mt * t * c[1] + t * t * b[1]]);
+      }
+      return { pts, closed: false };
+    }
+    case "ellipse": {
+      // sample the same closed Catmull-Rom spline the renderer draws
+      const P = p.points, n = P.length, STEPS = 16, pts = [];
+      for (let i = 0; i < n; i++) {
+        const p0 = P[(i - 1 + n) % n], p1 = P[i];
+        const p2 = P[(i + 1) % n],     p3 = P[(i + 2) % n];
+        const c1 = [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6];
+        const c2 = [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6];
+        for (let s = 0; s < STEPS; s++) {
+          const t = s / STEPS, mt = 1 - t;
+          pts.push([
+            mt**3 * p1[0] + 3*mt*mt*t * c1[0] + 3*mt*t*t * c2[0] + t**3 * p2[0],
+            mt**3 * p1[1] + 3*mt*mt*t * c1[1] + 3*mt*t*t * c2[1] + t**3 * p2[1]]);
+        }
+      }
+      return { pts, closed: true };
+    }
+  }
+}
+
+function polylineSegs(pts, closed) {
+  const segs = [];
+  const n = closed ? pts.length : pts.length - 1;
+  let cum = 0;
+  for (let i = 0; i < n; i++) {
+    const a = pts[i], b = pts[(i + 1) % pts.length];
+    const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    segs.push({ a, b, len, cum });
+    cum += len;
+  }
+  return { segs, total: cum };
+}
+
+/* Closest point on a polyline: arc-length parameter + distance. */
+function closestParam(segs, x, y) {
+  let best = { param: 0, dist: Infinity };
+  for (const s of segs) {
+    const dx = s.b[0] - s.a[0], dy = s.b[1] - s.a[1];
+    const l2 = dx * dx + dy * dy;
+    const t = l2 === 0 ? 0 :
+      Math.max(0, Math.min(1, ((x - s.a[0]) * dx + (y - s.a[1]) * dy) / l2));
+    const px = s.a[0] + t * dx, py = s.a[1] + t * dy;
+    const d = Math.hypot(x - px, y - py);
+    if (d < best.dist) best = { param: s.cum + t * s.len, dist: d };
+  }
+  return best;
+}
+
+function paramPoint(segs, total, t, closed) {
+  // closed outlines wrap around the seam; open ones clamp to their ends —
+  // wrapping an open line's endpoint (t = total) back to its start was a bug
+  const tm = closed
+    ? ((t % total) + total) % total
+    : Math.max(0, Math.min(total, t));
+  for (const s of segs) {
+    if (tm <= s.cum + s.len + 1e-9) {
+      const u = s.len === 0 ? 0 : (tm - s.cum) / s.len;
+      return [s.a[0] + u * (s.b[0] - s.a[0]), s.a[1] + u * (s.b[1] - s.a[1])];
+    }
+  }
+  const last = segs[segs.length - 1];
+  return [last.b[0], last.b[1]];
+}
+
+/* Parameter along AB of a proper AB x CD intersection, else null. */
+function segIntersectParam(ax, ay, bx, by, cx, cy, dx, dy) {
+  const rX = bx - ax, rY = by - ay, sX = dx - cx, sY = dy - cy;
+  const denom = rX * sY - rY * sX;
+  if (Math.abs(denom) < 1e-12) return null;         // parallel
+  const t = ((cx - ax) * sY - (cy - ay) * sX) / denom;
+  const u = ((cx - ax) * rY - (cy - ay) * rX) / denom;
+  if (t < -1e-9 || t > 1 + 1e-9 || u < -1e-9 || u > 1 + 1e-9) return null;
+  return Math.min(1, Math.max(0, t));
+}
+
+/* Sub-path of a polyline between arc-length params t0 < t1 (t1 may wrap
+   past the total for closed outlines). */
+function extractSubPath(segs, total, t0, t1, closed) {
+  const out = [paramPoint(segs, total, t0, closed)];
+  for (let m = 0; m <= 1; m++) {
+    for (const s of segs) {
+      const bp = s.cum + m * total;
+      if (bp > t0 + 0.5 && bp < t1 - 0.5) out.push(paramPoint(segs, total, bp, closed));
+    }
+  }
+  out.push(paramPoint(segs, total, t1, closed));
+  // drop near-duplicate consecutive points
+  return out.filter((q, i) =>
+    i === 0 || Math.hypot(q[0] - out[i - 1][0], q[1] - out[i - 1][1]) > 0.05);
+}
+
+function perpDist(p, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  const l2 = dx * dx + dy * dy;
+  if (l2 === 0) return Math.hypot(p[0] - a[0], p[1] - a[1]);
+  const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2));
+  return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
+}
+
+/* Ramer-Douglas-Peucker: thin out sampled curves while keeping the exact
+   endpoints (the cut points). */
+function rdpSimplify(pts, eps) {
+  if (pts.length <= 2) return pts;
+  const keep = new Uint8Array(pts.length);
+  keep[0] = keep[pts.length - 1] = 1;
+  const stack = [[0, pts.length - 1]];
+  while (stack.length) {
+    const [i, j] = stack.pop();
+    let maxD = -1, maxK = -1;
+    for (let k = i + 1; k < j; k++) {
+      const d = perpDist(pts[k], pts[i], pts[j]);
+      if (d > maxD) { maxD = d; maxK = k; }
+    }
+    if (maxD > eps) {
+      keep[maxK] = 1;
+      stack.push([i, maxK], [maxK, j]);
+    }
+  }
+  return pts.filter((_, k) => keep[k]);
+}
+
+function sliceAt(x, y) {
+  const threshold = Math.max(HIT_DIST, thickness / 2 + 4);
+  const stack = stackedPieces().filter(layerVisible);
+
+  // nearest outline under the click, topmost winning ties
+  // (guides can't be sliced themselves, but they DO cut other pieces)
+  let best = null;
+  for (let i = stack.length - 1; i >= 0; i--) {
+    const p = stack[i];
+    if (isGuidePiece(p)) continue;
+    const { pts, closed } = outlinePolyline(p);
+    if (pts.length < 2) continue;
+    const { segs, total } = polylineSegs(pts, closed);
+    const hit = closestParam(segs, x, y);
+    if (hit.dist <= threshold && (!best || hit.dist < best.dist - 0.5)) {
+      best = { piece: p, segs, total, closed, param: hit.param, dist: hit.dist };
+    }
+  }
+  if (!best) {
+    statusEl.textContent = "Slice — click directly on a lead line";
+    return;
+  }
+  if (best.piece.locked) {
+    statusEl.textContent = `That ${best.piece.kind} is locked — unlock it to slice it`;
+    return;
+  }
+
+  // cut parameters: every crossing with every other visible piece
+  let cuts = [];
+  for (const other of stack) {
+    if (other === best.piece) continue;
+    const o = outlinePolyline(other);
+    if (o.pts.length < 2) continue;
+    const oSegs = polylineSegs(o.pts, o.closed).segs;
+    for (const st of best.segs) {
+      for (const so of oSegs) {
+        const t = segIntersectParam(st.a[0], st.a[1], st.b[0], st.b[1],
+                                    so.a[0], so.a[1], so.b[0], so.b[1]);
+        if (t !== null) cuts.push(st.cum + t * st.len);
+      }
+    }
+  }
+  cuts.sort((a, b) => a - b);
+  cuts = cuts.filter((c, i) => i === 0 || c - cuts[i - 1] > 0.75);
+
+  const L = best.total, tC = best.param;
+  const spans = [];                        // param ranges that survive
+
+  if (best.closed) {
+    if (cuts.length < 2) {
+      // 0 or 1 crossings: the whole outline is a single segment
+      pieces = pieces.filter(q => q !== best.piece);
+      selection = selection.filter(q => q !== best.piece);
+      render();
+      commit(`Slice ${best.piece.kind}`);
+      statusEl.textContent =
+        "The outline had no dividing crossings, so slicing removed all of it";
+      return;
+    }
+    let a = -1, b = -1;
+    for (const c of cuts) if (c <= tC) a = c;
+    for (let i = cuts.length - 1; i >= 0; i--) if (cuts[i] >= tC) b = cuts[i];
+    if (a === -1) a = cuts[cuts.length - 1] - L;   // wrap backwards
+    if (b === -1) b = cuts[0] + L;                 // wrap forwards
+    // removed arc runs a -> b (contains the click); remainder is b -> a (+L)
+    const t1 = a <= b ? a + L : a;
+    if (t1 - b > 1) spans.push([b, t1]);
+  } else {
+    const inner = cuts.filter(c => c > 0.5 && c < L - 0.5);
+    const all = [0, ...inner, L];
+    let a = 0, b = L;
+    for (const c of all) if (c <= tC) a = c;
+    for (let i = all.length - 1; i >= 0; i--) if (all[i] >= tC) b = all[i];
+    if (a > 1) spans.push([0, a]);
+    if (L - b > 1) spans.push([b, L]);
+  }
+
+  pieces = pieces.filter(q => q !== best.piece);
+  let firstNew = null;
+  for (const [t0, t1] of spans) {
+    const pl = rdpSimplify(extractSubPath(best.segs, L, t0, t1, best.closed), 0.6);
+    if (pl.length < 2) continue;
+    const np = { kind: "path", points: pl, fill: "",
+                 id: nextId++, layer: best.piece.layer };
+    pieces.push(np);
+    if (!firstNew) firstNew = np;
+  }
+  selection = firstNew ? [firstNew] : [];
+  render();
+  commit(`Slice ${best.piece.kind}`);
+}
+
+/* ========================= save / load / export ======================== */
+
+/* Sandboxed previews (like the Claude artifact viewer) block programmatic
+   downloads. When embedded in a frame, fall back to in-page alternatives:
+   a right-click-savable image for PNG, copyable text for the project. */
+const EMBEDDED = (() => {
+  try { return window.self !== window.top; } catch { return true; }
+})();
+
+const modal = document.getElementById("modal");
+const modalTitle = document.getElementById("modal-title");
+const modalBody = document.getElementById("modal-body");
+const modalActions = document.getElementById("modal-actions");
+
+function showModal(title, bodyHTML, actions) {
+  modalTitle.textContent = title;
+  modalBody.innerHTML = bodyHTML;
+  modalActions.innerHTML = "";
+  for (const a of actions) {
+    const b = document.createElement("button");
+    b.textContent = a.label;
+    if (a.primary) b.className = "primary";
+    b.addEventListener("click", () => a.fn && a.fn());
+    modalActions.appendChild(b);
+  }
+  modal.hidden = false;
+}
+
+function closeModal() {
+  modal.hidden = true;
+  modalBody.innerHTML = "";
+}
+modal.addEventListener("click", e => { if (e.target === modal) closeModal(); });
+
+function copyToClipboard(text, sourceTextarea) {
+  const fallback = () => {
+    if (sourceTextarea) {
+      sourceTextarea.select();
+      try { document.execCommand("copy"); statusEl.textContent = "Copied to clipboard"; }
+      catch { statusEl.textContent = "Copy failed — select the text and copy manually"; }
+    }
+  };
+  if (typeof navigator !== "undefined" && navigator.clipboard &&
+      navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(
+      () => { statusEl.textContent = "Copied to clipboard"; },
+      fallback);
+  } else fallback();
+}
+
+function downloadBlob(blob, filename) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+function tryDownloadDataURL(dataURL, filename) {
+  try {
+    const a = document.createElement("a");
+    a.href = dataURL;
+    a.download = filename;
+    a.click();
+  } catch { /* sandbox said no; the in-page fallback remains available */ }
+}
+
+/* Render the artwork (paint + pieces, no grid/handles/padlocks) to an
+   offscreen canvas. The background is TRANSPARENT — any area with no
+   shape, line, or paint exports as transparency, not paper white. */
+function renderArtwork() {
+  const out = document.createElement("canvas");
+  out.width = canvasW;
+  out.height = canvasH;
+  const ctx = out.getContext("2d");
+  if (!ctx) return null;
+
+  if (paintVisible && pctx && paintCanvas.width > 0) {
+    // On screen the paint multiplies with the paper; over a transparent
+    // background we bake that paper tint into the paint colors so the
+    // exported hues match what's on screen, while empty pixels stay clear.
+    const tmp = document.createElement("canvas");
+    tmp.width = canvasW;
+    tmp.height = canvasH;
+    const tctx = tmp.getContext("2d");
+    tctx.drawImage(paintCanvas, 0, 0);
+    const img = tctx.getImageData(0, 0, canvasW, canvasH);
+    const d = img.data;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i + 3] === 0) continue;
+      d[i]     = Math.round(d[i]     * PAPER_RGB[0] / 255);
+      d[i + 1] = Math.round(d[i + 1] * PAPER_RGB[1] / 255);
+      d[i + 2] = Math.round(d[i + 2] * PAPER_RGB[2] / 255);
+    }
+    tctx.putImageData(img, 0, 0);
+    ctx.drawImage(tmp, 0, 0);
+  }
+
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  ctx.lineWidth = thickness;
+  for (const p of stackedPieces()) {
+    if (!layerVisible(p)) continue;
+    if (isGuidePiece(p)) continue;      // construction lines aren't artwork
+    const path = new Path2D(piecePath(p));
+    const fill = pieceFill(p);
+    if (fill !== "none" && fill !== "transparent") {
+      ctx.fillStyle = fill;
+      ctx.fill(path);
+    }
+    ctx.strokeStyle = LEAD;
+    ctx.stroke(path);
+  }
+  return out;
+}
+
+function exportPNG() {
+  const out = renderArtwork();
+  if (!out) return;
+
+  if (!EMBEDDED) {
+    out.toBlob(blob => {
+      if (blob) downloadBlob(blob, "stained-glass.png");
+      statusEl.textContent = "Exported stained-glass.png";
+    }, "image/png");
+    return;
+  }
+
+  const dataURL = out.toDataURL("image/png");
+  showModal("Export PNG",
+    `<p>This preview blocks direct downloads, so here's your image in-page:
+      <b>right-click (or long-press) it and choose \u201cSave image as\u2026\u201d</b>.</p>
+     <img src="${dataURL}" alt="Exported stained glass pattern">`,
+    [
+      { label: "Try download anyway",
+        fn: () => tryDownloadDataURL(dataURL, "stained-glass.png") },
+      { label: "Close", primary: true, fn: closeModal },
+    ]);
+}
+
+/* Save the entire working state — pattern, layers, settings, and the paint
+   raster — as a JSON project that loadProject / paste-to-load can restore. */
+function projectJSON() {
+  return JSON.stringify({
+    app: "stained-glass-designer",
+    version: 1,
+    pieces: pieces.map(({ locked, ...rest }) => rest),
+    nextId,
+    layers,
+    nextLayerId,
+    activeLayerId,
+    lockedIds: [...lockedIds],
+    hiddenLayerIds: [...hiddenLayerIds],
+    thickness,
+    gridSize,
+    snapOn,
+    canvasW,
+    canvasH,
+    fillsOn,
+    paintColor,
+    paintVisible,
+    paintPNG: pctx ? paintCanvas.toDataURL("image/png") : null,
+  });
+}
+
+function saveProject() {
+  const json = projectJSON();
+
+  if (!EMBEDDED) {
+    downloadBlob(new Blob([json], { type: "application/json" }),
+                 "stained-glass-pattern.json");
+    statusEl.textContent = "Project saved as stained-glass-pattern.json";
+    return;
+  }
+
+  showModal("Save project",
+    `<p>This preview blocks downloads, so copy the project text below and keep
+      it somewhere safe (e.g. paste into a file named <b>pattern.json</b>).
+      Restore it any time with \u201cLoad project\u201d.</p>
+     <textarea id="save-text" readonly spellcheck="false"></textarea>`,
+    [
+      { label: "Copy to clipboard", primary: true,
+        fn: () => copyToClipboard(json, document.getElementById("save-text")) },
+      { label: "Try download anyway",
+        fn: () => tryDownloadDataURL(
+          "data:application/json;charset=utf-8," + encodeURIComponent(json),
+          "stained-glass-pattern.json") },
+      { label: "Close", fn: closeModal },
+    ]);
+  // set via property to avoid HTML-escaping a large JSON string
+  document.getElementById("save-text").value = json;
+}
+
+/* Push every setting back into its toolbar control after a load. */
+function syncControls() {
+  document.getElementById("thickness").value = thickness;
+  document.getElementById("thickness-out").textContent = thickness + "px";
+  document.getElementById("grid").value = gridSize;
+  document.getElementById("grid-out").textContent = gridSize + "px";
+  document.getElementById("canvas-w").value = canvasW;
+  document.getElementById("canvas-h").value = canvasH;
+  document.getElementById("paint-color").value = paintColor;
+  document.getElementById("btn-snap").classList.toggle("active", snapOn);
+  document.getElementById("btn-fills").classList.toggle("active", fillsOn);
+  document.getElementById("btn-paint-vis").classList.toggle("active", paintVisible);
+  paintCanvas.style.display = paintVisible ? "block" : "none";
+}
+
+/* Parse and apply a project. Returns true on success. */
+function applyProjectText(text, sourceName) {
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    statusEl.textContent = "That isn't valid JSON";
+    return false;
+  }
+  if (!data || data.app !== "stained-glass-designer" ||
+      !Array.isArray(data.pieces) || !Array.isArray(data.layers)) {
+    statusEl.textContent = "That doesn't look like a saved pattern";
+    return false;
+  }
+
+  pieces = data.pieces;
+  pieces.forEach(p => {                       // migrate older save format
+    if (p.kind === "guide") { p.kind = "line"; p.guide = true; }
+  });
+  nextId = data.nextId || (Math.max(0, ...pieces.map(p => p.id)) + 1);
+  layers = data.layers.length ? data.layers : [{ id: 1, name: "Base" }];
+  nextLayerId = data.nextLayerId ||
+    (Math.max(0, ...layers.map(L => L.id)) + 1);
+  activeLayerId = layerIndex(data.activeLayerId) !== -1
+    ? data.activeLayerId : layers[layers.length - 1].id;
+  pieces.forEach(p => { if (layerIndex(p.layer) === -1) p.layer = layers[0].id; });
+
+  lockedIds.clear();
+  (data.lockedIds || []).forEach(id => lockedIds.add(id));
+  pieces.forEach(p => {
+    if (lockedIds.has(p.id)) p.locked = true;
+    else delete p.locked;
+  });
+  hiddenLayerIds.clear();
+  (data.hiddenLayerIds || []).forEach(id => hiddenLayerIds.add(id));
+
+  thickness = data.thickness ?? thickness;
+  gridSize = data.gridSize ?? gridSize;
+  snapOn = !!data.snapOn;
+  canvasW = data.canvasW || canvasW;
+  canvasH = data.canvasH || canvasH;
+  fillsOn = data.fillsOn !== false;
+  paintColor = data.paintColor || paintColor;
+  paintVisible = data.paintVisible !== false;
+
+  applyCanvasSize();
+  applyGrid();
+  syncControls();
+
+  if (pctx) {
+    pctx.clearRect(0, 0, paintCanvas.width, paintCanvas.height);
+    if (data.paintPNG) {
+      const img = new Image();
+      img.onload = () => pctx.drawImage(img, 0, 0);
+      img.src = data.paintPNG;
+    }
+  }
+
+  selection = [];
+  setTool("select");
+  render();
+  renderLayers();
+
+  // a loaded pattern starts a fresh history
+  history = [];
+  historyIndex = -1;
+  commit("Loaded pattern");
+  statusEl.textContent = `Loaded ${sourceName}`;
+  return true;
+}
+
+function loadProject(file) {
+  const reader = new FileReader();
+  reader.onerror = () => { statusEl.textContent = "Couldn't read that file"; };
+  reader.onload = () => {
+    if (applyProjectText(reader.result, file.name)) closeModal();
+  };
+  reader.readAsText(file);
+}
+
+function openLoadDialog(fileInput) {
+  if (!EMBEDDED) {
+    fileInput.click();
+    return;
+  }
+  showModal("Load project",
+    `<p>Pick your saved <b>.json</b> file, or paste the project text you copied
+      when saving.</p>
+     <textarea id="load-text" spellcheck="false"
+       placeholder="Paste project JSON here\u2026"></textarea>`,
+    [
+      { label: "Choose file\u2026", fn: () => fileInput.click() },
+      { label: "Load pasted text", primary: true,
+        fn: () => {
+          const t = document.getElementById("load-text").value.trim();
+          if (!t) { statusEl.textContent = "Paste the project text first"; return; }
+          if (applyProjectText(t, "pasted text")) closeModal();
+        } },
+      { label: "Cancel", fn: closeModal },
+    ]);
+}
+
+// ---- right-click menu: convert pieces to/from guidelines ----
+const ctxEl = document.getElementById("ctx");
+
+function hideCtx() { ctxEl.style.display = "none"; }
+
+function kindLabel(p) {
+  return p.kind === "polygon" ? "shape"
+       : p.kind === "ellipse" ? "ellipse"
+       : p.kind;
+}
+
+function toggleGuide(piece) {
+  if (piece.locked) return;
+  if (piece.guide) delete piece.guide;
+  else piece.guide = true;
+  render();
+  commit(piece.guide
+    ? `Convert ${kindLabel(piece)} to guideline`
+    : `Convert guideline to ${kindLabel(piece)}`);
+  statusEl.textContent = piece.guide
+    ? `Converted to a guideline — excluded from exports and paint, still cuts in slicing`
+    : `Converted back to lead — part of the artwork again`;
+}
+
+function showCtx(x, y, piece) {
+  ctxEl.innerHTML = "";
+  const btn = document.createElement("button");
+  if (piece.locked) {
+    btn.textContent = "Locked — unlock to convert";
+    btn.disabled = true;
+  } else {
+    btn.textContent = isGuidePiece(piece)
+      ? `Convert to lead ${kindLabel(piece)}`
+      : `Convert ${kindLabel(piece)} to guideline`;
+    btn.addEventListener("click", () => {
+      toggleGuide(piece);
+      hideCtx();
+    });
+  }
+  ctxEl.appendChild(btn);
+  ctxEl.style.left = x + "px";
+  ctxEl.style.top = y + "px";
+  ctxEl.style.display = "block";
+}
+
+stage.addEventListener("contextmenu", evt => {
+  evt.preventDefault();
+  const id = hoverIdFromEvent(evt);
+  const piece = id !== null ? pieceById(id) : null;
+  if (!piece) { hideCtx(); return; }
+  if (!isSelected(piece)) selection = [piece];
+  render();
+  showCtx(evt.clientX, evt.clientY, piece);
+});
+
+// any click or Escape elsewhere dismisses the menu
+window.addEventListener("pointerdown", evt => {
+  if (ctxEl.style.display === "block" &&
+      !(ctxEl.contains && ctxEl.contains(evt.target))) hideCtx();
+}, true);
+
+/* ========================= keyboard shortcuts ========================== */
+
+window.addEventListener("keydown", evt => {
+  if (evt.key === "Escape") { closeModal(); hideCtx(); return; }
+
+  // don't hijack typing in text fields (canvas size, save/load textareas)
+  const tag = evt.target && evt.target.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA") return;
+
+  const mod = evt.ctrlKey || evt.metaKey;
+  const key = evt.key.toLowerCase();
+
+  if (mod && key === "z") {
+    evt.preventDefault();
+    evt.shiftKey ? redo() : undo();
+    return;
+  }
+  if (mod && key === "y") {
+    evt.preventDefault();
+    redo();
+    return;
+  }
+  if (mod && key === "c") {
+    evt.preventDefault();
+    copySelected();
+    return;
+  }
+  if (mod && key === "v") {
+    evt.preventDefault();
+    pasteClipboard();
+    return;
+  }
+  if (!mod && key === "l") {          // L selects the Line tool
+    setTool("line");
+    return;
+  }
+  if (!mod && key === "g") {          // G selects the Guideline tool
+    setTool("guide");
+    return;
+  }
+  if (!mod && key === "s") {          // S selects the Select tool
+    setTool("select");
+    return;
+  }
+  if (!mod && key === "c") {          // C selects the Curve tool (Ctrl+C copies)
+    setTool("curve");
+    return;
+  }
+  if (!mod && key === "x") {          // X selects the Slice tool
+    setTool("slice");
+    return;
+  }
+  if (evt.key === "Delete" || evt.key === "Backspace") {
+    deleteSelected();
+  }
+});
+
+/* ============================== boot =================================== */
+
+buildToolbar();
+setTool("select");
+
+// start the canvas at the size of the visible pane (rounded to the grid)
+{
+  const wrap = document.getElementById("stage-wrap");
+  const w = (wrap.clientWidth || canvasW + 28) - 28;   // minus padding
+  const h = (wrap.clientHeight || canvasH + 28) - 28;
+  canvasW = Math.max(200, Math.round(w / 10) * 10);
+  canvasH = Math.max(200, Math.round(h / 10) * 10);
+  document.getElementById("canvas-w").value = canvasW;
+  document.getElementById("canvas-h").value = canvasH;
+}
+applyCanvasSize();
+applyGrid();
+renderLayers();
+render();
+commit("New sheet");
+</script>
+</body>
+</html>
