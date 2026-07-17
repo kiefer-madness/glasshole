@@ -440,6 +440,10 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  #layers-list .lop {
+    font-size: 10.5px;
+    color: var(--text-dim);
+  }
   #btn-move-layer {
     width: 100%;
     justify-content: center;
@@ -462,6 +466,7 @@
     pointer-events: auto;
   }
   #stage .piece.locked { cursor: default; }
+  #stage .piece.inactive { cursor: default; }
 </style>
 </head>
 <body>
@@ -490,6 +495,11 @@
       <button id="btn-add-layer" title="Add a layer on top">+</button>
     </div>
     <ul id="layers-list"></ul>
+    <div class="panel-label">Layer opacity</div>
+    <div class="slider-wrap">
+      <input type="range" id="layer-opacity" min="5" max="100" value="100">
+      <output id="layer-opacity-out">100%</output>
+    </div>
     <button class="tool" id="btn-move-layer"
       title="Send the selected pieces to the highlighted layer">
       <span>Send piece to layer</span>
@@ -567,12 +577,26 @@ let canvasW = 1200;                // canvas size
 let canvasH = 800;
 const lockedIds = new Set();       // which pieces are locked (not in history)
 
+// image pieces: the (potentially large) data URLs live OUTSIDE history
+// snapshots, keyed by piece id, so undo/redo stays lightweight
+const imgSrcs = new Map();         // piece id -> data URL
+const imgCache = new Map();        // piece id -> loaded Image element
+
+function cacheImage(p) {
+  if (typeof Image === "undefined" || !p.src) return;
+  const im = new Image();
+  im.onload = () => render();
+  im.src = p.src;
+  imgCache.set(p.id, im);
+}
+
 // layers: ordered bottom -> top. Pieces carry a layer id.
 // Visibility is a view setting (like locks); structure/membership is history.
 let layers = [{ id: 1, name: "Base" }];
 let nextLayerId = 2;
 let activeLayerId = 1;             // new pieces land here
 const hiddenLayerIds = new Set();  // view-only
+const layerOpacity = new Map();    // layer id -> 0.05..1 (view-only, saved)
 
 // paint layer (raster, separate from the pattern — not in history)
 let paintColor = "#7eb4dc";
@@ -584,6 +608,14 @@ function snapPt(x, y) { return snapOn ? [snap1(x), snap1(y)] : [x, y]; }
 
 function layerIndex(id) { return layers.findIndex(L => L.id === id); }
 function isGuidePiece(p) { return !!p.guide || p.kind === "guide"; }
+function onActiveLayer(p) { return p.layer === activeLayerId; }
+
+/* Only the active layer is interactive — switching layers drops any
+   selection that lives elsewhere. */
+function setActiveLayer(id) {
+  activeLayerId = id;
+  selection = selection.filter(onActiveLayer);
+}
 function layerVisible(p) { return !hiddenLayerIds.has(p.layer); }
 
 /* Pieces in stacking order: layer by layer (bottom first), preserving
@@ -684,7 +716,7 @@ const LINE_TOOL_LIST = [
 ];
 
 const HINTS = {
-  select:   "Select (S) — drag on empty paper for marquee select · Shift-click adds to selection · drag body to move · square handles skew a vertex · corner dots resize (Shift = uniform) · top knob rotates (Shift = 15\u00b0 steps) · Delete removes",
+  select:   "Select (S) — only the active layer is grabbable · drag on empty paper for marquee select · Shift-click adds to selection · drag body to move · square handles skew a vertex · corner dots resize (Shift = uniform) · top knob rotates (Shift = 15\u00b0 steps) · Delete removes",
   bucket:   "Paint fill — click any segment to flood it up to the lead lines, even where several shapes bound it · white paint erases",
   slice:    "Slice (X) — click a lead line to erase the span between its nearest crossings with other pieces",
   ellipse:  "Ellipse — click on the paper to place one, then pull its 8 handles to reshape it",
@@ -808,6 +840,16 @@ function buildToolbar() {
       </button>
     </div>
     <hr class="rule">
+    <div class="panel-label">Image</div>
+    <button class="tool" id="btn-add-image" title="Add an image as its own layer">
+      ${icon(`<rect x="4" y="4" width="18" height="18" rx="2" fill="none" stroke="${LEAD}" stroke-width="1.8"/>
+        <circle cx="9.5" cy="9.5" r="2" fill="rgba(126,180,220,.7)" stroke="${LEAD}" stroke-width="1.2"/>
+        <path d="M5 19 L11 13 L15 17 L18 14 L21 17" fill="none" stroke="${LEAD}" stroke-width="1.6" stroke-linejoin="round"/>
+        <path d="M17 8 v-5 M14.5 5.5 L17 3 L19.5 5.5" fill="none" stroke="${LEAD}" stroke-width="1.6" stroke-linecap="round"/>`)}
+      <span>Add image\u2026</span>
+    </button>
+    <input type="file" id="file-image" accept="image/*" hidden>
+    <hr class="rule">
     <div class="panel-label">Paint</div>
     <div id="bucket-slot"></div>
     <div id="paint-row">
@@ -909,6 +951,15 @@ function buildToolbar() {
   document.getElementById("btn-paper-landscape").addEventListener("click",
     () => setCanvasPreset(2200, 1700, "landscape"));
 
+  const imgInput = document.getElementById("file-image");
+  document.getElementById("btn-add-image").addEventListener("click",
+    () => imgInput.click());
+  imgInput.addEventListener("change", () => {
+    if (imgInput.files && imgInput.files[0]) addImageLayer(imgInput.files[0]);
+    imgInput.value = "";
+  });
+
+
   document.getElementById("paint-color").addEventListener("input", e => {
     paintColor = e.target.value;
   });
@@ -961,8 +1012,9 @@ function setTool(key) {
 
 function snapshot() {
   return JSON.stringify({
-    // lock state is excluded — it's a setting, re-applied on restore
-    pieces: pieces.map(({ locked, ...rest }) => rest),
+    // lock state and image data are excluded — locks are settings, and
+    // image sources are large; both are re-applied on restore
+    pieces: pieces.map(({ locked, src, ...rest }) => rest),
     nextId,
     layers,
     nextLayerId,
@@ -983,14 +1035,20 @@ function restore(index) {
   historyIndex = index;
   const s = JSON.parse(history[index].state);
   pieces = s.pieces;
-  pieces.forEach(p => { if (lockedIds.has(p.id)) p.locked = true; });
+  pieces.forEach(p => {
+    if (lockedIds.has(p.id)) p.locked = true;
+    if (p.kind === "image") {
+      p.src = imgSrcs.get(p.id);
+      if (!imgCache.has(p.id)) cacheImage(p);
+    }
+  });
   nextId = s.nextId;
   layers = s.layers || layers;
   nextLayerId = s.nextLayerId || nextLayerId;
   pieces.forEach(p => { if (layerIndex(p.layer) === -1) p.layer = layers[0].id; });
   if (layerIndex(activeLayerId) === -1) activeLayerId = layers[layers.length - 1].id;
   const selIds = s.selectedIds || (s.selectedId != null ? [s.selectedId] : []);
-  selection = pieces.filter(p => selIds.includes(p.id));
+  selection = pieces.filter(p => selIds.includes(p.id) && onActiveLayer(p));
 
   render();
   renderHistory();
@@ -1024,10 +1082,13 @@ function renderLayers() {
   layersList.innerHTML = [...layers].reverse().map(L => {
     const hidden = hiddenLayerIds.has(L.id);
     const active = L.id === activeLayerId;
+    const lop = layerOpacity.get(L.id) ?? 1;
+    const opTag = lop < 1
+      ? ` <span class="lop">${Math.round(lop * 100)}%</span>` : "";
     return `<li class="${active ? "current" : ""}" data-layer="${L.id}">
       <button data-eye="${L.id}" title="${hidden ? "Show" : "Hide"} layer">
         ${hidden ? "\u25cb" : "\u25c9"}</button>
-      <span class="lname">${L.name}</span>
+      <span class="lname">${L.name}${opTag}</span>
       <button data-select="${L.id}"
         title="Select every piece on this layer (transform them as one)">\u2b1a</button>
       <button data-up="${L.id}" title="Raise layer">\u25b4</button>
@@ -1035,6 +1096,15 @@ function renderLayers() {
       <button data-del="${L.id}" title="Delete layer and its pieces">\u00d7</button>
     </li>`;
   }).join("");
+
+  // the opacity slider always reflects the ACTIVE layer's setting
+  const opSlider = document.getElementById("layer-opacity");
+  if (opSlider) {
+    const v = Math.round((layerOpacity.get(activeLayerId) ?? 1) * 100);
+    opSlider.value = v;
+    const opOut = document.getElementById("layer-opacity-out");
+    if (opOut) opOut.textContent = v + "%";
+  }
 }
 
 layersList.addEventListener("click", evt => {
@@ -1094,6 +1164,7 @@ layersList.addEventListener("click", evt => {
     layers = layers.filter(q => q.id !== id);
     pieces = pieces.filter(p => p.layer !== id);
     hiddenLayerIds.delete(id);
+    layerOpacity.delete(id);
     selection = selection.filter(p => p.layer !== id);
     if (activeLayerId === id) activeLayerId = layers[layers.length - 1].id;
     render();
@@ -1104,18 +1175,29 @@ layersList.addEventListener("click", evt => {
 
   const li = t.closest("li[data-layer]");  // row click: set active layer
   if (li) {
-    activeLayerId = +li.dataset.layer;
+    setActiveLayer(+li.dataset.layer);
+    render();
     renderLayers();
     const L = layers[layerIndex(activeLayerId)];
     statusEl.textContent = `"${L.name}" is now the active layer — new pieces land here`;
   }
 });
 
+document.getElementById("layer-opacity").addEventListener("input", e => {
+  const v = Math.max(5, Math.min(100, +e.target.value)) / 100;
+  layerOpacity.set(activeLayerId, v);
+  document.getElementById("layer-opacity-out").textContent =
+    Math.round(v * 100) + "%";
+  render();
+  renderLayers();
+});
+
 document.getElementById("btn-add-layer").addEventListener("click", () => {
   const L = { id: nextLayerId, name: `Layer ${nextLayerId}` };
   nextLayerId++;
   layers.push(L);                          // new layers go on top
-  activeLayerId = L.id;
+  setActiveLayer(L.id);
+  render();
   renderLayers();
   commit(`Add layer "${L.name}"`);
   statusEl.textContent =
@@ -1296,8 +1378,45 @@ function render() {
 
   const stacked = stackedPieces().filter(layerVisible);
 
+  // pieces arrive layer-contiguous; wrap each faded layer in ONE opacity
+  // group so its pieces composite together before fading (standard layer
+  // semantics — overlaps inside the layer don't double-fade)
+  let openLayer = null;
+  const closeLayerGroup = () => {
+    if (openLayer !== null && (layerOpacity.get(openLayer) ?? 1) < 1) {
+      html += `</g>`;
+    }
+    openLayer = null;
+  };
+
   for (const p of stacked) {
+    if (p.layer !== openLayer) {
+      closeLayerGroup();
+      openLayer = p.layer;
+      const lop = layerOpacity.get(openLayer) ?? 1;
+      if (lop < 1) html += `<g opacity="${lop}">`;
+    }
     const sel = isSelected(p);
+
+    if (p.kind === "image") {
+      const [tl, tr, , bl] = p.points;
+      const ma = (tr[0] - tl[0]) / p.w0, mb = (tr[1] - tl[1]) / p.w0;
+      const mc = (bl[0] - tl[0]) / p.h0, md = (bl[1] - tl[1]) / p.h0;
+      if (p.src) {
+        html += `<image class="piece${p.locked ? " locked" : ""}${onActiveLayer(p) ? "" : " inactive"}" data-id="${p.id}"
+          href="${p.src}" width="${p.w0}" height="${p.h0}"
+          opacity="${p.opacity ?? 1}" preserveAspectRatio="none"
+          transform="matrix(${ma} ${mb} ${mc} ${md} ${tl[0]} ${tl[1]})"/>`;
+      }
+      if (sel) {
+        const br = [tr[0] + bl[0] - tl[0], tr[1] + bl[1] - tl[1]];
+        html += `<path d="M ${tl} L ${tr} L ${br} L ${bl} Z" fill="none"
+          stroke="${AMBER}" stroke-width="1.5" stroke-dasharray="6 4"
+          style="pointer-events:none"/>`;
+      }
+      continue;
+    }
+
     const isGuide = isGuidePiece(p);
     const stroke = sel ? AMBER : (isGuide ? GUIDE : LEAD);
     const d = piecePath(p);
@@ -1307,7 +1426,7 @@ function render() {
     // fully hide whatever sits beneath them (see pieceFill)
     const fill = pieceFill(p);
 
-    html += `<path class="piece${p.locked ? " locked" : ""}" data-id="${p.id}" d="${d}"
+    html += `<path class="piece${p.locked ? " locked" : ""}${onActiveLayer(p) ? "" : " inactive"}" data-id="${p.id}" d="${d}"
       fill="${fill}" stroke="${stroke}"
       stroke-width="${isGuide ? GUIDE_WIDTH : thickness}"
       ${isGuide ? `stroke-dasharray="${GUIDE_DASH}" opacity="${sel ? 1 : 0.9}"` : ""}
@@ -1320,9 +1439,12 @@ function render() {
     }
   }
 
+  closeLayerGroup();
+
   // padlock toggles at each piece's anchor — hidden until that piece is
   // hovered (locked pieces also stay shown while selected)
   for (const p of stacked) {
+    if (!onActiveLayer(p)) continue;       // padlocks only on the active layer
     const [lx, ly] = lockAnchor(p);
     const shown = p.id === hoveredId || (p.locked && isSelected(p));
     const shackle = p.locked
@@ -1363,8 +1485,8 @@ function render() {
   } else if (sole) {
     html += frameChrome(bboxOf(sole));
 
-    // vertex handles (skipped for dense sliced paths — use the frame instead)
-    if (sole.points.length <= 24) {
+    // vertex handles (skipped for images and dense paths — use the frame)
+    if (sole.kind !== "image" && sole.points.length <= 24) {
       sole.points.forEach((pt, i) => {
         const isCtrl = sole.kind === "curve" && i === 1;
         if (isCtrl) {
@@ -1558,6 +1680,19 @@ stage.addEventListener("pointerdown", evt => {
 
   if (t.dataset && t.dataset.id) {
     const piece = pieceById(t.dataset.id);
+    if (!piece || !onActiveLayer(piece)) {
+      // pieces on other layers aren't grabbable — click passes through
+      if (piece) {
+        const L = layers[layerIndex(piece.layer)];
+        statusEl.textContent =
+          `That ${piece.kind} is on "${L ? L.name : "another layer"}" — select that layer in the panel to work with it`;
+      }
+      drag = { mode: "marquee", start: [x, y], cur: [x, y],
+               additive: evt.shiftKey };
+      stage.setPointerCapture(evt.pointerId);
+      render();
+      return;
+    }
     if (evt.shiftKey) {                    // shift-click toggles membership
       selection = isSelected(piece)
         ? selection.filter(q => q !== piece)
@@ -1596,6 +1731,10 @@ let hoveredId = null;
    use a point ON the path so the pointer can travel from stroke to chip
    without crossing empty space (which would hide the chip en route). */
 function lockAnchor(p) {
+  if (p.kind === "image") {
+    const tl = p.points[0], br = p.points[2];
+    return [(tl[0] + br[0]) / 2, (tl[1] + br[1]) / 2];
+  }
   if (p.kind === "curve") {            // on-curve point at t = 0.5
     const [a, c, b] = p.points;
     return [0.25 * a[0] + 0.5 * c[0] + 0.25 * b[0],
@@ -1623,10 +1762,13 @@ function updateLockHover(id) {
 function hoverIdFromEvent(evt) {
   const t = evt.target;
   if (!t || !t.closest) return null;
+  let id = null;
   const lock = t.closest(".lock-btn");
-  if (lock) return +lock.dataset.id;
-  if (t.dataset && t.dataset.id) return +t.dataset.id;
-  return null;
+  if (lock) id = +lock.dataset.id;
+  else if (t.dataset && t.dataset.id) id = +t.dataset.id;
+  if (id === null) return null;
+  const piece = pieceById(id);
+  return piece && onActiveLayer(piece) ? id : null;   // active layer only
 }
 
 function updateCoord(x, y) {
@@ -1793,10 +1935,12 @@ stage.addEventListener("pointerup", () => {
     if (rx1 - rx0 < 3 && ry1 - ry0 < 3) {
       if (!drag.additive) selection = [];          // plain click on paper
     } else {
-      const hit = stackedPieces().filter(layerVisible).filter(p => {
-        const b = bboxOf(p, 0);
-        return b.x0 <= rx1 && b.x1 >= rx0 && b.y0 <= ry1 && b.y1 >= ry0;
-      });
+      const hit = stackedPieces()
+        .filter(p => layerVisible(p) && onActiveLayer(p))
+        .filter(p => {
+          const b = bboxOf(p, 0);
+          return b.x0 <= rx1 && b.x1 >= rx0 && b.y0 <= ry1 && b.y1 >= ry0;
+        });
       selection = drag.additive
         ? [...new Set([...selection, ...hit])] : hit;
       if (selection.length) {
@@ -1840,14 +1984,55 @@ function deleteSelected() {
   commit(label);
 }
 
+/* ============================ image layers ============================= */
+
+function addImageLayer(file) {
+  const reader = new FileReader();
+  reader.onerror = () => { statusEl.textContent = "Couldn't read that image"; };
+  reader.onload = () => {
+    const src = reader.result;
+    const probe = new Image();
+    probe.onload = () => {
+      const w0 = probe.naturalWidth || probe.width || 1;
+      const h0 = probe.naturalHeight || probe.height || 1;
+      // scale to fit the canvas, centered
+      const sc = Math.min(canvasW / w0, canvasH / h0, 1);
+      const w = w0 * sc, h = h0 * sc;
+      const x0 = (canvasW - w) / 2, y0 = (canvasH - h) / 2;
+
+      const L = { id: nextLayerId, name: `Image ${nextLayerId}` };
+      nextLayerId++;
+      layers.push(L);                        // its own layer, on top
+      activeLayerId = L.id;
+
+      const piece = {
+        kind: "image", id: nextId++, layer: L.id,
+        points: [[x0, y0], [x0 + w, y0], [x0 + w, y0 + h], [x0, y0 + h]],
+        w0, h0, opacity: 1, fill: "", src,
+      };
+      imgSrcs.set(piece.id, src);
+      cacheImage(piece);
+      pieces.push(piece);
+      selection = [piece];
+      setTool("select");
+      render();
+      renderLayers();
+      commit(`Add image layer "${L.name}"`);
+      statusEl.textContent =
+        `Image added on its own layer — move/resize/rotate it like a shape; fade it with the Layer opacity slider`;
+    };
+    probe.onerror = () => { statusEl.textContent = "That file isn't a usable image"; };
+    probe.src = src;
+  };
+  reader.readAsDataURL(file);
+}
+
 /* ========================== copy / paste =============================== */
 
 function copySelected() {
   if (!selection.length) return;
-  clipboard = JSON.parse(JSON.stringify(selection.map(p => ({
-    kind: p.kind, points: p.points, fill: p.fill,
-    guide: p.guide || undefined,
-  }))));
+  clipboard = JSON.parse(JSON.stringify(selection.map(
+    ({ id, layer, locked, ...rest }) => rest)));
   pasteCount = 0;
   statusEl.textContent = clipboard.length === 1
     ? `Copied ${clipboard[0].kind} — Ctrl+V to paste`
@@ -1867,6 +2052,10 @@ function pasteClipboard() {
     piece.points = piece.points.map(([px, py]) => [px + off, py + off]);
     piece.id = nextId++;
     piece.layer = activeLayerId;
+    if (piece.kind === "image" && piece.src) {
+      imgSrcs.set(piece.id, piece.src);
+      cacheImage(piece);
+    }
     pieces.push(piece);
     return piece;
   });
@@ -1946,7 +2135,7 @@ function floodFill(x, y) {
   bctx.lineWidth = Math.max(thickness, 2);
   bctx.strokeStyle = "#000";
   for (const p of pieces) {
-    if (isGuidePiece(p)) continue;      // guides never seal paint regions
+    if (isGuidePiece(p) || p.kind === "image") continue;  // never seal paint
     if (layerVisible(p)) bctx.stroke(new Path2D(piecePath(p)));
   }
   const bd = bctx.getImageData(0, 0, W, H).data;
@@ -2131,7 +2320,8 @@ function sliceAt(x, y) {
   let best = null;
   for (let i = stack.length - 1; i >= 0; i--) {
     const p = stack[i];
-    if (isGuidePiece(p)) continue;
+    if (isGuidePiece(p) || p.kind === "image") continue;
+    if (!onActiveLayer(p)) continue;       // only slice the active layer
     const { pts, closed } = outlinePolyline(p);
     if (pts.length < 2) continue;
     const { segs, total } = polylineSegs(pts, closed);
@@ -2152,7 +2342,7 @@ function sliceAt(x, y) {
   // cut parameters: every crossing with every other visible piece
   let cuts = [];
   for (const other of stack) {
-    if (other === best.piece) continue;
+    if (other === best.piece || other.kind === "image") continue;
     const o = outlinePolyline(other);
     if (o.pts.length < 2) continue;
     const oSegs = polylineSegs(o.pts, o.closed).segs;
@@ -2318,7 +2508,22 @@ function renderArtwork() {
   for (const p of stackedPieces()) {
     if (!layerVisible(p)) continue;
     if (isGuidePiece(p)) continue;      // construction lines aren't artwork
+    const lop = layerOpacity.get(p.layer) ?? 1;
+    if (p.kind === "image") {
+      const im = imgCache.get(p.id);
+      if (!im) continue;
+      const [tl, tr, , bl] = p.points;
+      ctx.save();
+      ctx.globalAlpha = (p.opacity ?? 1) * lop;
+      ctx.setTransform((tr[0] - tl[0]) / p.w0, (tr[1] - tl[1]) / p.w0,
+                       (bl[0] - tl[0]) / p.h0, (bl[1] - tl[1]) / p.h0,
+                       tl[0], tl[1]);
+      ctx.drawImage(im, 0, 0);
+      ctx.restore();
+      continue;
+    }
     const path = new Path2D(piecePath(p));
+    ctx.globalAlpha = lop;
     const fill = pieceFill(p);
     if (fill !== "none" && fill !== "transparent") {
       ctx.fillStyle = fill;
@@ -2326,6 +2531,7 @@ function renderArtwork() {
     }
     ctx.strokeStyle = LEAD;
     ctx.stroke(path);
+    ctx.globalAlpha = 1;
   }
   return out;
 }
@@ -2367,6 +2573,7 @@ function projectJSON() {
     activeLayerId,
     lockedIds: [...lockedIds],
     hiddenLayerIds: [...hiddenLayerIds],
+    layerOpacity: [...layerOpacity],
     thickness,
     gridSize,
     snapOn,
@@ -2436,6 +2643,10 @@ function applyProjectText(text, sourceName) {
   pieces = data.pieces;
   pieces.forEach(p => {                       // migrate older save format
     if (p.kind === "guide") { p.kind = "line"; p.guide = true; }
+    if (p.kind === "image" && p.src) {
+      imgSrcs.set(p.id, p.src);
+      cacheImage(p);
+    }
   });
   nextId = data.nextId || (Math.max(0, ...pieces.map(p => p.id)) + 1);
   layers = data.layers.length ? data.layers : [{ id: 1, name: "Base" }];
@@ -2453,6 +2664,8 @@ function applyProjectText(text, sourceName) {
   });
   hiddenLayerIds.clear();
   (data.hiddenLayerIds || []).forEach(id => hiddenLayerIds.add(id));
+  layerOpacity.clear();
+  (data.layerOpacity || []).forEach(([id, v]) => layerOpacity.set(id, v));
 
   thickness = data.thickness ?? thickness;
   gridSize = data.gridSize ?? gridSize;
@@ -2543,7 +2756,10 @@ function toggleGuide(piece) {
 function showCtx(x, y, piece) {
   ctxEl.innerHTML = "";
   const btn = document.createElement("button");
-  if (piece.locked) {
+  if (piece.kind === "image") {
+    btn.textContent = "Images can't become guidelines";
+    btn.disabled = true;
+  } else if (piece.locked) {
     btn.textContent = "Locked — unlock to convert";
     btn.disabled = true;
   } else {
