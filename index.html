@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Stained Glass Pattern Designer</title>
+<title>glasshole</title>
 <style>
   :root {
     --ink: #26221c;          /* lead lines */
@@ -472,7 +472,7 @@
 <body>
 
 <header>
-  <h1>I got that kiefer madness, baby</h1>
+  <h1>nice going, glasshole</h1>
 </header>
 
 <main>
@@ -724,7 +724,7 @@ const HINTS = {
   rect:     "Rectangle — click on the paper to place one",
   pentagon: "Pentagon — click on the paper to place one",
   hexagon:  "Hexagon — click on the paper to place one",
-  line:     "Line (L) — press and drag on the paper to draw · length shows in grid squares",
+  line:     "Line (L) — press and drag to draw · hold Shift to snap to 15° angles (perfect H/V) · length shows in grid squares",
   guide:    "Guideline (G) — press and drag to draw a construction guide · not part of the artwork: excluded from exports and paint boundaries, but slicing does cut at guide crossings",
   gcurve:   "Guide curve — a curved construction guide · bend it with the round middle handle · right-click any piece to convert it to or from a guideline",
   curve:    "Curve (C) — press and drag to place it, then bend it with the round middle handle · length shows in grid squares",
@@ -1469,6 +1469,13 @@ function render() {
       ${g ? `stroke-dasharray="${GUIDE_DASH}"` : ""}
       stroke-linecap="round" opacity="0.6"/>`;
     html += lengthLabel(drag.piece, g ? GUIDE : LEAD);
+    if (drag.angleDeg != null) {
+      const e = drag.piece.points[drag.piece.points.length - 1];
+      html += `<text x="${e[0] + 14}" y="${e[1] - 10}"
+        font-size="12.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+        font-weight="600" fill="${AMBER}" stroke="#f6f1e6" stroke-width="3.5"
+        paint-order="stroke" style="pointer-events:none">${drag.angleDeg}°</text>`;
+    }
   }
 
   // selection chrome: single piece gets vertex handles; groups get one
@@ -1837,10 +1844,23 @@ stage.addEventListener("pointermove", evt => {
   const [x, y] = svgPoint(evt);
 
   if (drag.mode === "new") {
-    const [gx, gy] = snapPt(x, y);
     const pts = drag.piece.points;
+    let ex, ey;
+    if (evt.shiftKey) {
+      // constrain to 15-degree increments (includes perfect H and V)
+      const dx = x - pts[0][0], dy = y - pts[0][1];
+      const len = Math.hypot(dx, dy);
+      const step = Math.PI / 12;
+      const a = Math.round(Math.atan2(dy, dx) / step) * step;
+      ex = pts[0][0] + len * Math.cos(a);
+      ey = pts[0][1] + len * Math.sin(a);
+      drag.angleDeg = ((Math.round(-a * 180 / Math.PI) % 360) + 360) % 360;
+    } else {
+      [ex, ey] = snapPt(x, y);
+      drag.angleDeg = null;
+    }
     const last = pts[pts.length - 1];
-    last[0] = gx; last[1] = gy;
+    last[0] = ex; last[1] = ey;
     if (drag.piece.kind === "curve") {
       pts[1][0] = (pts[0][0] + pts[2][0]) / 2;   // keep it straight while drawing
       pts[1][1] = (pts[0][1] + pts[2][1]) / 2;
