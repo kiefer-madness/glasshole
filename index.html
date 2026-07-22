@@ -444,6 +444,16 @@
     font-size: 10.5px;
     color: var(--text-dim);
   }
+  #layers-list .lrename {
+    width: 100%;
+    padding: 2px 4px;
+    background: var(--bench-hi);
+    border: 1px solid var(--amber);
+    border-radius: 3px;
+    color: var(--text);
+    font: inherit;
+    font-size: 12.5px;
+  }
   #btn-move-layer {
     width: 100%;
     justify-content: center;
@@ -641,6 +651,28 @@ function opaqueFill(fill) {
   return `rgb(${mix(+m[1], PAPER_RGB[0])}, ${mix(+m[2], PAPER_RGB[1])}, ${mix(+m[3], PAPER_RGB[2])})`;
 }
 
+/* When shift-dragging a vertex, the angle constraint is measured from an
+   anchor vertex: a line's other end, a curve's opposite end, a path's or
+   polygon's neighboring vertex. Returns null when no anchor applies
+   (e.g. a curve's bend control). */
+function vertexAngleAnchor(piece, idx) {
+  switch (piece.kind) {
+    case "line":
+    case "guide":
+      return 1 - idx;
+    case "curve":
+      if (idx === 1) return null;          // the bend control is free
+      return idx === 0 ? 2 : 0;
+    case "path":
+      return idx > 0 ? idx - 1 : (piece.points.length > 1 ? 1 : null);
+    case "polygon":
+    case "ellipse":
+      return (idx - 1 + piece.points.length) % piece.points.length;
+    default:
+      return null;
+  }
+}
+
 /* Fill color for a piece under the current display settings. Shared by the
    on-screen renderer and the PNG exporter. */
 function pieceFill(p) {
@@ -716,7 +748,7 @@ const LINE_TOOL_LIST = [
 ];
 
 const HINTS = {
-  select:   "Select (S) — only the active layer is grabbable · drag on empty paper for marquee select · Shift-click adds to selection · drag body to move · square handles skew a vertex · corner dots resize (Shift = uniform) · top knob rotates (Shift = 15\u00b0 steps) · Delete removes",
+  select:   "Select (S) — only the active layer is grabbable · drag on empty paper for marquee select · Shift-click adds to selection · drag body to move · square handles skew a vertex (Shift = 15° edge snap) · corner dots resize (Shift keeps aspect ratio) · top knob rotates (Shift = 15\u00b0 steps) · Delete removes",
   bucket:   "Paint fill — click any segment to flood it up to the lead lines, even where several shapes bound it · white paint erases",
   slice:    "Slice (X) — click a lead line to erase the span between its nearest crossings with other pieces",
   ellipse:  "Ellipse — click on the paper to place one, then pull its 8 handles to reshape it",
@@ -897,7 +929,14 @@ function buildToolbar() {
       ${icon(`<path d="M4 8 h7 l2 2 h9 v10 h-18 Z" fill="rgba(228,178,96,.55)" stroke="${LEAD}" stroke-width="1.8" stroke-linejoin="round"/>`)}
       <span>Load project</span>
     </button>
+    <button class="tool" id="btn-import"
+      title="Add a saved project's pieces onto a new layer in THIS project">
+      ${icon(`<rect x="4" y="10" width="12" height="12" rx="1.5" fill="rgba(148,190,120,.55)" stroke="${LEAD}" stroke-width="1.6"/>
+        <rect x="10" y="4" width="12" height="12" rx="1.5" fill="none" stroke="${LEAD}" stroke-width="1.6" stroke-dasharray="3 2.5"/>`)}
+      <span>Import as layer</span>
+    </button>
     <input type="file" id="file-open" accept=".json,application/json" hidden>
+    <input type="file" id="file-import" accept=".json,application/json" hidden>
   `);
 
   const slider = document.getElementById("thickness");
@@ -990,6 +1029,22 @@ function buildToolbar() {
   fileInput.addEventListener("change", () => {
     if (fileInput.files && fileInput.files[0]) loadProject(fileInput.files[0]);
     fileInput.value = "";              // allow re-loading the same file
+  });
+
+  const importInput = document.getElementById("file-import");
+  document.getElementById("btn-import").addEventListener("click",
+    () => openImportDialog(importInput));
+  importInput.addEventListener("change", () => {
+    if (importInput.files && importInput.files[0]) {
+      const f = importInput.files[0];
+      const r = new FileReader();
+      r.onerror = () => { statusEl.textContent = "Couldn't read that file"; };
+      r.onload = () => {
+        if (importProjectAsLayer(r.result, f.name)) closeModal();
+      };
+      r.readAsText(f);
+    }
+    importInput.value = "";
   });
 
   document.getElementById("btn-delete").addEventListener("click", deleteSelected);
@@ -1088,7 +1143,7 @@ function renderLayers() {
     return `<li class="${active ? "current" : ""}" data-layer="${L.id}">
       <button data-eye="${L.id}" title="${hidden ? "Show" : "Hide"} layer">
         ${hidden ? "\u25cb" : "\u25c9"}</button>
-      <span class="lname">${L.name}${opTag}</span>
+      <span class="lname" title="Double-click to rename">${L.name}${opTag}</span>
       <button data-select="${L.id}"
         title="Select every piece on this layer (transform them as one)">\u2b1a</button>
       <button data-up="${L.id}" title="Raise layer">\u25b4</button>
@@ -1106,6 +1161,59 @@ function renderLayers() {
     if (opOut) opOut.textContent = v + "%";
   }
 }
+
+/* Rename core: validates, applies, and records one history entry. */
+function renameLayer(id, newName) {
+  const L = layers[layerIndex(id)];
+  if (!L) return false;
+  newName = (newName || "").trim().slice(0, 40);
+  if (!newName || newName === L.name) return false;
+  const old = L.name;
+  L.name = newName;
+  renderLayers();
+  commit(`Rename layer "${old}" → "${newName}"`);
+  statusEl.textContent = `Layer renamed to "${newName}"`;
+  return true;
+}
+
+/* Inline editor: double-click a layer's name to rename it.
+   Enter or clicking away commits; Escape cancels. */
+function startLayerRename(id, nameEl) {
+  const L = layers[layerIndex(id)];
+  if (!L) return;
+  const input = document.createElement("input");
+  input.type = "text";
+  input.value = L.name;
+  input.maxLength = 40;
+  input.className = "lrename";
+  nameEl.innerHTML = "";
+  nameEl.appendChild(input);
+  if (input.focus) input.focus();
+  if (input.select) input.select();
+
+  let done = false;
+  const finish = keep => {
+    if (done) return;
+    done = true;
+    if (!keep || !renameLayer(id, input.value)) renderLayers();
+  };
+  input.addEventListener("keydown", e => {
+    e.stopPropagation();               // typing must not trigger app hotkeys
+    if (e.key === "Enter") finish(true);
+    else if (e.key === "Escape") finish(false);
+  });
+  input.addEventListener("blur", () => finish(true));
+  // clicks inside the editor must not re-trigger row handlers (which
+  // rebuild the list and would destroy the editor mid-edit)
+  input.addEventListener("click", e => e.stopPropagation());
+  input.addEventListener("dblclick", e => e.stopPropagation());
+}
+
+layersList.addEventListener("dblclick", evt => {
+  const li = evt.target.closest ? evt.target.closest("li[data-layer]") : null;
+  const nameEl = evt.target.closest ? evt.target.closest(".lname") : null;
+  if (li && nameEl) startLayerRename(+li.dataset.layer, nameEl);
+});
 
 layersList.addEventListener("click", evt => {
   const t = evt.target;
@@ -1512,6 +1620,15 @@ function render() {
     if (["line", "curve", "path", "guide"].includes(sole.kind)) {
       html += lengthLabel(sole, AMBER);
     }
+
+    // angle readout while shift-constraining a vertex drag
+    if (drag && drag.mode === "vertex" && drag.angleDeg != null) {
+      const v = sole.points[drag.index];
+      html += `<text x="${v[0] + 14}" y="${v[1] - 10}"
+        font-size="12.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+        font-weight="600" fill="${AMBER}" stroke="#f6f1e6" stroke-width="3.5"
+        paint-order="stroke" style="pointer-events:none">${drag.angleDeg}°</text>`;
+    }
   } else if (selection.length > 1) {
     html += frameChrome(bboxOfGroup(selection));
   }
@@ -1904,9 +2021,24 @@ stage.addEventListener("pointermove", evt => {
   } else if (drag.mode === "vertex") {
     const sole = soleSelected();
     if (!sole || sole.locked) return;
-    const [gx, gy] = snapPt(x, y);
-    sole.points[drag.index][0] = gx;
-    sole.points[drag.index][1] = gy;
+    let vx, vy;
+    const anchorIdx = evt.shiftKey ? vertexAngleAnchor(sole, drag.index) : null;
+    if (anchorIdx !== null) {
+      // constrain the stretched edge to 15-degree increments
+      const [ax, ay] = sole.points[anchorIdx];
+      const dx = x - ax, dy = y - ay;
+      const len = Math.hypot(dx, dy);
+      const step = Math.PI / 12;
+      const a = Math.round(Math.atan2(dy, dx) / step) * step;
+      vx = ax + len * Math.cos(a);
+      vy = ay + len * Math.sin(a);
+      drag.angleDeg = ((Math.round(-a * 180 / Math.PI) % 360) + 360) % 360;
+    } else {
+      [vx, vy] = snapPt(x, y);
+      drag.angleDeg = null;
+    }
+    sole.points[drag.index][0] = vx;
+    sole.points[drag.index][1] = vy;
     drag.moved = true;
     render();
   } else if (drag.mode === "body" && drag.members) {
@@ -2812,6 +2944,89 @@ window.addEventListener("pointerdown", evt => {
   if (ctxEl.style.display === "block" &&
       !(ctxEl.contains && ctxEl.contains(evt.target))) hideCtx();
 }, true);
+
+/* Merge a saved project's pieces into THIS project as one new layer.
+   Source layers are flattened but their stacking order is preserved; the
+   current project's canvas, settings, and paint are untouched. */
+function importProjectAsLayer(text, sourceName) {
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    statusEl.textContent = "That isn't valid JSON";
+    return false;
+  }
+  if (!data || data.app !== "stained-glass-designer" ||
+      !Array.isArray(data.pieces) || !Array.isArray(data.layers)) {
+    statusEl.textContent = "That doesn't look like a saved pattern";
+    return false;
+  }
+  if (!data.pieces.length) {
+    statusEl.textContent = "That project has no pieces to import";
+    return false;
+  }
+
+  // preserve the source document's stacking order while flattening
+  const order = new Map(data.layers.map((L, i) => [L.id, i]));
+  const sorted = data.pieces
+    .map((sp, i) => [sp, i])
+    .sort((a, b) =>
+      ((order.get(a[0].layer) ?? 0) - (order.get(b[0].layer) ?? 0)) ||
+      (a[1] - b[1]))
+    .map(([sp]) => sp);
+
+  const base = (sourceName || "Imported")
+    .replace(/\.json$/i, "").trim().slice(0, 32) || "Imported";
+  const L = { id: nextLayerId++, name: base };
+  layers.push(L);                          // new layer on top
+
+  const news = sorted.map(sp => {
+    const piece = JSON.parse(JSON.stringify(sp));
+    delete piece.locked;                   // imports arrive unlocked
+    if (piece.kind === "guide") {          // migrate older save format
+      piece.kind = "line";
+      piece.guide = true;
+    }
+    piece.id = nextId++;
+    piece.layer = L.id;
+    if (piece.kind === "image" && piece.src) {
+      imgSrcs.set(piece.id, piece.src);
+      cacheImage(piece);
+    }
+    pieces.push(piece);
+    return piece;
+  });
+
+  setActiveLayer(L.id);
+  selection = news;
+  setTool("select");
+  render();
+  renderLayers();
+  commit(`Import "${L.name}" (${news.length} piece${news.length > 1 ? "s" : ""})`);
+  statusEl.textContent =
+    `Imported ${news.length} piece${news.length > 1 ? "s" : ""} onto layer "${L.name}" — drag the frame to position them`;
+  return true;
+}
+
+function openImportDialog(fileInput) {
+  showModal("Import as layer",
+    `<p>Add the pieces from a saved project onto a <b>new layer</b> in this
+      project — handy for reusing shapes you've drawn before. Pick the
+      <b>.json</b> file, or paste its text. Your canvas, settings, and paint
+      stay as they are.</p>
+     <textarea id="import-text" spellcheck="false"
+       placeholder="Paste project JSON here\u2026"></textarea>`,
+    [
+      { label: "Choose file\u2026", fn: () => fileInput.click() },
+      { label: "Import pasted text", primary: true,
+        fn: () => {
+          const t = document.getElementById("import-text").value.trim();
+          if (!t) { statusEl.textContent = "Paste the project text first"; return; }
+          if (importProjectAsLayer(t, "Imported")) closeModal();
+        } },
+      { label: "Cancel", fn: closeModal },
+    ]);
+}
 
 /* ========================= keyboard shortcuts ========================== */
 
