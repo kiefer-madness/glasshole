@@ -454,12 +454,23 @@
     font: inherit;
     font-size: 12.5px;
   }
-  #btn-move-layer {
+  #btn-flatten {
     width: 100%;
     justify-content: center;
     font-size: 12.5px;
     border: 1px solid var(--bench-edge);
     margin-bottom: 4px;
+  }
+  #send-layer-target {
+    width: 100%;
+    margin-bottom: 6px;
+    padding: 6px 8px;
+    background: var(--bench-hi);
+    border: 1px solid var(--bench-edge);
+    border-radius: 6px;
+    color: var(--text);
+    font: inherit;
+    font-size: 12.5px;
   }
 
   /* ---------- transform handles ---------- */
@@ -510,9 +521,11 @@
       <input type="range" id="layer-opacity" min="5" max="100" value="100">
       <output id="layer-opacity-out">100%</output>
     </div>
-    <button class="tool" id="btn-move-layer"
-      title="Send the selected pieces to the highlighted layer">
-      <span>Send piece to layer</span>
+    <select id="send-layer-target"
+      title="Move the selected pieces onto another layer"></select>
+    <button class="tool" id="btn-flatten"
+      title="Merge every checked (\u25a3) layer's contents onto one new layer">
+      <span>Flatten checked layers</span>
     </button>
     <hr class="rule">
     <div class="panel-label">History</div>
@@ -607,6 +620,7 @@ let nextLayerId = 2;
 let activeLayerId = 1;             // new pieces land here
 const hiddenLayerIds = new Set();  // view-only
 const layerOpacity = new Map();    // layer id -> 0.05..1 (view-only, saved)
+const checkedLayerIds = new Set(); // \u25a3 marks in the panel (flatten targets)
 
 // paint layer (raster, separate from the pattern — not in history)
 let paintColor = "#7eb4dc";
@@ -1141,6 +1155,9 @@ function renderLayers() {
     const opTag = lop < 1
       ? ` <span class="lop">${Math.round(lop * 100)}%</span>` : "";
     return `<li class="${active ? "current" : ""}" data-layer="${L.id}">
+      <button data-check="${L.id}"
+        title="${checkedLayerIds.has(L.id) ? "Uncheck" : "Check"} for flattening">
+        ${checkedLayerIds.has(L.id) ? "\u25a3" : "\u25a1"}</button>
       <button data-eye="${L.id}" title="${hidden ? "Show" : "Hide"} layer">
         ${hidden ? "\u25cb" : "\u25c9"}</button>
       <span class="lname" title="Double-click to rename">${L.name}${opTag}</span>
@@ -1151,6 +1168,16 @@ function renderLayers() {
       <button data-del="${L.id}" title="Delete layer and its pieces">\u00d7</button>
     </li>`;
   }).join("");
+
+  // target dropdown for "send selection to another layer"
+  const sendSel = document.getElementById("send-layer-target");
+  if (sendSel) {
+    sendSel.innerHTML =
+      `<option value="">Send selection to\u2026</option>` +
+      [...layers].reverse().map(L =>
+        `<option value="${L.id}">${L.name}</option>`).join("");
+    sendSel.value = "";
+  }
 
   // the opacity slider always reflects the ACTIVE layer's setting
   const opSlider = document.getElementById("layer-opacity");
@@ -1218,6 +1245,14 @@ layersList.addEventListener("dblclick", evt => {
 layersList.addEventListener("click", evt => {
   const t = evt.target;
 
+  if (t.dataset.check) {                   // toggle the flatten checkmark
+    const id = +t.dataset.check;
+    checkedLayerIds.has(id) ? checkedLayerIds.delete(id)
+                            : checkedLayerIds.add(id);
+    renderLayers();
+    return;
+  }
+
   if (t.dataset.select) {                  // select the whole layer
     const id = +t.dataset.select;
     const L = layers[layerIndex(id)];
@@ -1273,6 +1308,7 @@ layersList.addEventListener("click", evt => {
     pieces = pieces.filter(p => p.layer !== id);
     hiddenLayerIds.delete(id);
     layerOpacity.delete(id);
+    checkedLayerIds.delete(id);
     selection = selection.filter(p => p.layer !== id);
     if (activeLayerId === id) activeLayerId = layers[layers.length - 1].id;
     render();
@@ -1312,25 +1348,74 @@ document.getElementById("btn-add-layer").addEventListener("click", () => {
     `"${L.name}" added on top — its pieces will be opaque and hide layers below`;
 });
 
-document.getElementById("btn-move-layer").addEventListener("click", () => {
+document.getElementById("send-layer-target").addEventListener("change", e => {
+  const targetId = +e.target.value;
+  e.target.value = "";                     // reset to the placeholder
+  if (!targetId) return;
   if (!selection.length) {
-    statusEl.textContent = "Select pieces first, then send them to the highlighted layer";
+    statusEl.textContent = "Select pieces first, then choose a destination layer";
     return;
   }
-  const movable = unlockedSelection().filter(p => p.layer !== activeLayerId);
+  const L = layers[layerIndex(targetId)];
+  if (!L) return;
+  if (targetId === activeLayerId) {
+    statusEl.textContent = "Those pieces are already on that layer";
+    return;
+  }
+  const movable = unlockedSelection();
   if (!movable.length) {
-    statusEl.textContent = unlockedSelection().length
-      ? "Selection is already on the active layer"
-      : "Selected pieces are locked — unlock them to move between layers";
+    statusEl.textContent =
+      "Selected pieces are locked — unlock them to move between layers";
     return;
   }
-  const L = layers[layerIndex(activeLayerId)];
-  movable.forEach(p => { p.layer = activeLayerId; });
+  movable.forEach(p => { p.layer = targetId; });
+  // follow the pieces so they stay selected and workable
+  activeLayerId = targetId;
+  selection = movable;
   render();
+  renderLayers();
   commit(movable.length === 1
     ? `Move ${movable[0].kind} to "${L.name}"`
     : `Move ${movable.length} pieces to "${L.name}"`);
+  statusEl.textContent =
+    `Moved to "${L.name}" — that layer is now active, selection kept`;
 });
+
+/* Merge every checked layer's pieces onto one new layer (placed where the
+   bottom-most checked layer sat), then remove the sources. */
+function flattenCheckedLayers() {
+  const ids = layers.filter(L => checkedLayerIds.has(L.id)).map(L => L.id);
+  if (ids.length < 2) {
+    statusEl.textContent =
+      "Check (\u25a1) at least two layers in the list, then flatten";
+    return;
+  }
+  const idSet = new Set(ids);
+  const merged = stackedPieces().filter(p => idSet.has(p.layer));
+  const insertAt = layers.findIndex(L => idSet.has(L.id));
+  const L = { id: nextLayerId++, name: `Flattened (${ids.length} layers)` };
+  layers = layers.filter(q => !idSet.has(q.id));
+  layers.splice(insertAt, 0, L);
+  const mergedSet = new Set(merged);
+  // re-append in stacked order so the merged layer looks identical
+  pieces = pieces.filter(q => !mergedSet.has(q)).concat(merged);
+  merged.forEach(q => { q.layer = L.id; });
+  ids.forEach(id => {
+    hiddenLayerIds.delete(id);
+    layerOpacity.delete(id);
+    checkedLayerIds.delete(id);
+  });
+  setActiveLayer(L.id);
+  selection = merged;
+  render();
+  renderLayers();
+  commit(`Flatten ${ids.length} layers`);
+  statusEl.textContent = merged.length
+    ? `Flattened ${ids.length} layers (${merged.length} piece${merged.length > 1 ? "s" : ""}) onto "${L.name}"`
+    : `Flattened ${ids.length} empty layers onto "${L.name}"`;
+}
+document.getElementById("btn-flatten").addEventListener("click",
+  flattenCheckedLayers);
 
 /* ============================ geometry ================================= */
 
