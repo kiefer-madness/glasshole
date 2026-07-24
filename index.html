@@ -8,6 +8,7 @@
   :root {
     --ink: #26221c;          /* lead lines */
     --paper: #f6f1e6;        /* pattern cartoon paper */
+    --paper-line-bold: rgba(126, 118, 95, .55);
     --paper-line: #e7dfcd;
     --bench: #2e2a25;        /* workbench chrome */
     --bench-hi: #3a352e;
@@ -132,6 +133,8 @@
     left: 0;
     transform-origin: 0 0;       /* scaled by the zoom transform */
     background:
+      linear-gradient(var(--paper-line-bold) 1px, transparent 1px) 0 0 / 100% 140px,
+      linear-gradient(90deg, var(--paper-line-bold) 1px, transparent 1px) 0 0 / 140px 100%,
       linear-gradient(var(--paper-line) 1px, transparent 1px) 0 0 / 100% 28px,
       linear-gradient(90deg, var(--paper-line) 1px, transparent 1px) 0 0 / 28px 100%,
       var(--paper);
@@ -2402,8 +2405,9 @@ function applyCanvasSize() {
 }
 
 function applyGrid() {
+  const g = gridSize, G = gridSize * 5;    // every 5th line is bolder
   board.style.backgroundSize =
-    `100% ${gridSize}px, ${gridSize}px 100%`;
+    `100% ${G}px, ${G}px 100%, 100% ${g}px, ${g}px 100%`;
 }
 
 /* =========================== paint bucket ============================== */
