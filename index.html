@@ -290,6 +290,34 @@
   }
   #ctx button:disabled { opacity: .45; cursor: default; }
 
+  /* ---------- label dialog ---------- */
+  #label-text {
+    width: 100%;
+    padding: 8px 10px;
+    background: var(--bench-hi);
+    border: 1px solid var(--bench-edge);
+    border-radius: 6px;
+    color: var(--text);
+    font: inherit;
+  }
+  #label-sizes { display: flex; gap: 6px; }
+  #label-sizes button {
+    flex: 1;
+    padding: 7px 0;
+    background: var(--bench-hi);
+    border: 1px solid var(--bench-edge);
+    border-radius: 6px;
+    color: var(--text);
+    font: inherit;
+    font-size: 12.5px;
+    cursor: pointer;
+  }
+  #label-sizes button.current {
+    background: var(--amber-soft);
+    border-color: var(--amber);
+    color: #f4d8ad;
+  }
+
   /* ---------- toolbar button rows (undo/redo, copy/paste) ---------- */
   .btnrow {
     display: flex;
@@ -632,6 +660,16 @@ function snapPt(x, y) { return snapOn ? [snap1(x), snap1(y)] : [x, y]; }
 
 function layerIndex(id) { return layers.findIndex(L => L.id === id); }
 function isGuidePiece(p) { return !!p.guide || p.kind === "guide"; }
+function escapeXML(t) {
+  return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+                  .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function labelBox(p) {                     // approximate text extents
+  const px = LABEL_SIZES[p.size] || LABEL_SIZES.m;
+  const [x0, y0] = p.points[0];
+  const w = Math.max(1, (p.text || "").length) * px * 0.62;
+  return { x: x0 - 4, y: y0 - px, w: w + 8, h: px * 1.3, px };
+}
 function onActiveLayer(p) { return p.layer === activeLayerId; }
 
 /* Only the active layer is interactive — switching layers drops any
@@ -741,6 +779,9 @@ const IC = {
                    stroke="${LEAD}" stroke-width="1.8" stroke-linejoin="round"/>
                   <path d="M20.5 15.5 q2.3 3.2 0 4.6 q-2.3 -1.4 0 -4.6" fill="rgba(126,180,220,.8)"
                    stroke="${LEAD}" stroke-width="1.3"/>`),
+  label:    icon(`<path d="M6 21 L13 5 L20 21 M8.8 15.5 h8.4" fill="none"
+                   stroke="${LEAD}" stroke-width="2.2" stroke-linecap="round"
+                   stroke-linejoin="round"/>`),
   slice:    icon(`<path d="M8.8 16.4 L20 4.5 M17.2 16.4 L6 4.5" stroke="${LEAD}"
                    stroke-width="1.9" stroke-linecap="round"/>
                   <circle cx="7" cy="19" r="2.7" fill="none" stroke="${LEAD}" stroke-width="1.8"/>
@@ -754,6 +795,9 @@ const SHAPE_TOOL_LIST = [
   ["pentagon", "Pentagon"],
   ["hexagon",  "Hexagon"],
 ];
+const LABEL_SIZES = { s: 18, m: 28, l: 44 };   // small / medium / large px
+let lastLabelSize = "m";
+
 const LINE_TOOL_LIST = [
   ["line",     "Line"],
   ["guide",    "Guideline"],
@@ -764,6 +808,7 @@ const LINE_TOOL_LIST = [
 const HINTS = {
   select:   "Select (S) — only the active layer is grabbable · drag on empty paper for marquee select · Shift-click adds to selection · drag body to move · square handles skew a vertex (Shift = 15° edge snap) · corner dots resize (Shift keeps aspect ratio) · top knob rotates (Shift = 15\u00b0 steps) · Delete removes",
   bucket:   "Paint fill — click any segment to flood it up to the lead lines, even where several shapes bound it · white paint erases",
+  label:    "Text label — click the paper to place a note (small/medium/large) · double-click a label to edit it · handy for notating line lengths",
   slice:    "Slice (X) — click a lead line to erase the span between its nearest crossings with other pieces",
   ellipse:  "Ellipse — click on the paper to place one, then pull its 8 handles to reshape it",
   triangle: "Triangle — click on the paper to place one",
@@ -852,6 +897,7 @@ function buildToolbar() {
   for (const [key, label] of LINE_TOOL_LIST) toolButton(key, label);
   bar.insertAdjacentHTML("beforeend", `<hr class="rule">`);
   toolButton("slice", "Slice");
+  toolButton("label", "Text label");
 
   bar.insertAdjacentHTML("beforeend", `
     <hr class="rule">
@@ -1477,6 +1523,12 @@ const TF_PAD = 16;
 const ROT_STALK = 26;
 
 function bboxOf(piece, pad = TF_PAD) {
+  if (piece.kind === "label") {
+    const b = labelBox(piece);
+    return { x0: b.x - pad, y0: b.y - pad,
+             x1: b.x + b.w + pad, y1: b.y + b.h - b.px * 0.3 + pad,
+             cx: b.x + b.w / 2, cy: b.y + b.h / 2 };
+  }
   const xs = piece.points.map(p => p[0]);
   const ys = piece.points.map(p => p[1]);
   const x0 = Math.min(...xs) - pad, x1 = Math.max(...xs) + pad;
@@ -1490,10 +1542,11 @@ function bboxCorners(b) {
 
 /* Padded bounding box around several pieces at once (group selections). */
 function bboxOfGroup(list, pad = TF_PAD) {
-  const xs = [], ys = [];
-  for (const p of list) for (const q of p.points) { xs.push(q[0]); ys.push(q[1]); }
-  const x0 = Math.min(...xs) - pad, x1 = Math.max(...xs) + pad;
-  const y0 = Math.min(...ys) - pad, y1 = Math.max(...ys) + pad;
+  const boxes = list.map(p => bboxOf(p, 0));
+  const x0 = Math.min(...boxes.map(b => b.x0)) - pad;
+  const x1 = Math.max(...boxes.map(b => b.x1)) + pad;
+  const y0 = Math.min(...boxes.map(b => b.y0)) - pad;
+  const y1 = Math.max(...boxes.map(b => b.y1)) + pad;
   return { x0, y0, x1, y1, cx: (x0 + x1) / 2, cy: (y0 + y1) / 2 };
 }
 
@@ -1590,6 +1643,20 @@ function render() {
       if (lop < 1) html += `<g opacity="${lop}">`;
     }
     const sel = isSelected(p);
+
+    if (p.kind === "label") {
+      const b = labelBox(p);
+      const col = sel ? AMBER : LEAD;
+      const inact = onActiveLayer(p) ? "" : " inactive";
+      html += `<rect class="piece${p.locked ? " locked" : ""}${inact}"
+        data-id="${p.id}" x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}"
+        fill="transparent"/>`;
+      html += `<text x="${p.points[0][0]}" y="${p.points[0][1]}"
+        font-size="${b.px}" font-weight="600"
+        font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+        fill="${col}" style="pointer-events:none">${escapeXML(p.text || "")}</text>`;
+      continue;
+    }
 
     if (p.kind === "image") {
       const [tl, tr, , bl] = p.points;
@@ -1838,6 +1905,12 @@ stage.addEventListener("pointerdown", evt => {
   // placing a closed shape
   if (["ellipse", "triangle", "rect", "pentagon", "hexagon"].includes(tool)) {
     placeShape(tool, gx, gy);
+    return;
+  }
+
+  // text label tool: click to place, then type in the dialog
+  if (tool === "label") {
+    openLabelModal(null, [gx, gy]);
     return;
   }
 
@@ -2372,7 +2445,7 @@ function floodFill(x, y) {
   bctx.lineWidth = Math.max(thickness, 2);
   bctx.strokeStyle = "#000";
   for (const p of pieces) {
-    if (isGuidePiece(p) || p.kind === "image") continue;  // never seal paint
+    if (isGuidePiece(p) || p.kind === "image" || p.kind === "label") continue;
     if (layerVisible(p)) bctx.stroke(new Path2D(piecePath(p)));
   }
   const bd = bctx.getImageData(0, 0, W, H).data;
@@ -2557,7 +2630,7 @@ function sliceAt(x, y) {
   let best = null;
   for (let i = stack.length - 1; i >= 0; i--) {
     const p = stack[i];
-    if (isGuidePiece(p) || p.kind === "image") continue;
+    if (isGuidePiece(p) || p.kind === "image" || p.kind === "label") continue;
     if (!onActiveLayer(p)) continue;       // only slice the active layer
     const { pts, closed } = outlinePolyline(p);
     if (pts.length < 2) continue;
@@ -2579,7 +2652,8 @@ function sliceAt(x, y) {
   // cut parameters: every crossing with every other visible piece
   let cuts = [];
   for (const other of stack) {
-    if (other === best.piece || other.kind === "image") continue;
+    if (other === best.piece || other.kind === "image" ||
+        other.kind === "label") continue;
     const o = outlinePolyline(other);
     if (o.pts.length < 2) continue;
     const oSegs = polylineSegs(o.pts, o.closed).segs;
@@ -2746,6 +2820,16 @@ function renderArtwork() {
     if (!layerVisible(p)) continue;
     if (isGuidePiece(p)) continue;      // construction lines aren't artwork
     const lop = layerOpacity.get(p.layer) ?? 1;
+    if (p.kind === "label") {
+      const b = labelBox(p);
+      ctx.save();
+      ctx.globalAlpha = lop;
+      ctx.font = `600 ${b.px}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+      ctx.fillStyle = LEAD;
+      ctx.fillText(p.text || "", p.points[0][0], p.points[0][1]);
+      ctx.restore();
+      continue;
+    }
     if (p.kind === "image") {
       const im = imgCache.get(p.id);
       if (!im) continue;
@@ -2993,7 +3077,18 @@ function toggleGuide(piece) {
 function showCtx(x, y, piece) {
   ctxEl.innerHTML = "";
   const btn = document.createElement("button");
-  if (piece.kind === "image") {
+  if (piece.kind === "label") {
+    btn.textContent = "Edit label\u2026";
+    if (piece.locked) {
+      btn.disabled = true;
+      btn.textContent = "Locked \u2014 unlock to edit";
+    } else {
+      btn.addEventListener("click", () => {
+        hideCtx();
+        openLabelModal(piece);
+      });
+    }
+  } else if (piece.kind === "image") {
     btn.textContent = "Images can't become guidelines";
     btn.disabled = true;
   } else if (piece.locked) {
@@ -3013,6 +3108,15 @@ function showCtx(x, y, piece) {
   ctxEl.style.top = y + "px";
   ctxEl.style.display = "block";
 }
+
+stage.addEventListener("dblclick", evt => {
+  if (tool !== "select") return;
+  const id = hoverIdFromEvent(evt);
+  const piece = id !== null ? pieceById(id) : null;
+  if (piece && piece.kind === "label" && !piece.locked) {
+    openLabelModal(piece);
+  }
+});
 
 stage.addEventListener("contextmenu", evt => {
   evt.preventDefault();
@@ -3111,6 +3215,77 @@ function openImportDialog(fileInput) {
         } },
       { label: "Cancel", fn: closeModal },
     ]);
+}
+
+/* ============================ text labels ============================== */
+
+function openLabelModal(existing, at) {
+  const isNew = !existing;
+  let size = existing ? (existing.size || "m") : lastLabelSize;
+
+  showModal(isNew ? "Add label" : "Edit label",
+    `<p>Label text (e.g. <b>12.5 sq</b> or <b>cut 2\u00d7</b>):</p>
+     <input type="text" id="label-text" maxlength="80" spellcheck="false"
+       placeholder="Type the note\u2026">
+     <p style="margin-top:10px">Size:</p>
+     <div id="label-sizes">
+       <button data-size="s">Small</button>
+       <button data-size="m">Medium</button>
+       <button data-size="l">Large</button>
+     </div>`,
+    [
+      { label: isNew ? "Add" : "Save", primary: true, fn: apply },
+      { label: "Cancel", fn: closeModal },
+    ]);
+
+  const input = document.getElementById("label-text");
+  input.value = existing ? existing.text : "";
+  if (input.focus) input.focus();
+  if (input.select && !isNew) input.select();
+  input.addEventListener("keydown", e => {
+    e.stopPropagation();                   // typing must not trigger hotkeys
+    if (e.key === "Enter") apply();
+  });
+
+  const sizesEl = document.getElementById("label-sizes");
+  const paintSizes = () => {
+    for (const b of sizesEl.children) {
+      if (b.classList && b.classList.toggle) {
+        b.classList.toggle("current", b.dataset.size === size);
+      }
+    }
+  };
+  sizesEl.addEventListener("click", e => {
+    if (e.target.dataset && e.target.dataset.size) {
+      size = e.target.dataset.size;
+      paintSizes();
+    }
+  });
+  paintSizes();
+
+  function apply() {
+    const text = (input.value || "").trim();
+    if (!text) {
+      statusEl.textContent = "Type some label text first";
+      return;
+    }
+    lastLabelSize = size;
+    if (isNew) {
+      const piece = { kind: "label", id: nextId++, layer: activeLayerId,
+                      fill: "", text, size, points: [at] };
+      pieces.push(piece);
+      selection = [piece];
+      setTool("select");
+      render();
+      commit(`Add label "${text.slice(0, 20)}"`);
+    } else {
+      existing.text = text;
+      existing.size = size;
+      render();
+      commit(`Edit label "${text.slice(0, 20)}"`);
+    }
+    closeModal();
+  }
 }
 
 /* ========================= keyboard shortcuts ========================== */
